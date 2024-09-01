@@ -1,0 +1,26 @@
+###############################
+### Matt VanCleave - Hackrf ROS Wrapper  
+## Container Cookbook 
+# arm64 Jetson
+###############################
+services:
+###############################
+## Hackrf Driver Core
+###############################  
+  hackrf_ros: # Working 
+    image: empyreanlattice/hackrf_ros:humble
+    build:
+      context: ../../
+      dockerfile: ./docker/Dockerfile.hackrf_ros
+    network_mode: host
+    environment:
+       - DISPLAY
+       - QT_X11_NO_MITSHM=1
+    volumes:
+      - "/tmp/.X11-unix:/tmp/.X11-unix:rw"
+      - "$HOME/.Xauthority:/root/.Xauthority:rw"
+      - "/dev:/dev" 
+      - ../../config:/config/   
+    privileged: true
+    tty: true
+    command: ros2 run hackrf_ros hackrf_node.py params_file:=/config/hackrf_rx.yaml

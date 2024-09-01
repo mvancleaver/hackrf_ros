@@ -1,0 +1,57 @@
+FROM ros:humble
+
+# Install Apt Packages
+RUN apt-get update && apt-get install -y \
+    git \
+    nano \
+    locales \
+    python3-dev \
+    python3-pip \
+    python3-tk \
+    libusb-1.0-0-dev \
+    libfftw3-dev \
+    hackrf \
+    && rm -rf /var/lib/apt/lists/*
+RUN locale-gen en_US.UTF-8
+SHELL ["/bin/bash", "-c"]
+   
+#RUN python3 -m pip install -U --upgrade pip
+RUN python3 -m pip install -U numpy numpy-quaternion matplotlib
+RUN python3 -m pip install -U PyQt6 
+RUN python3 -m pip install -U python_hackrf 
+RUN python3 -m pip install -U pyhackrf
+RUN python3 -m pip install -U pyhackrf2
+
+RUN mkdir -p /dev_util/
+RUN git clone https://github.com/portapack-mayhem/mayhem-firmware.git /dev_util/portapack-mayhem/mayhem-firmware
+RUN git clone https://github.com/dressel/pyhackrf.git /dev_util/pyhackrf
+RUN sed -i '525s/.*/    for i in range(0,4): /' /dev_util/pyhackrf/libhackrf.py
+
+
+# Install General ROS2 Packages
+RUN mkdir -p /ros2_ws/src
+RUN git clone https://github.com/ros2/common_interfaces.git --branch $ROS_DISTRO /ros2_ws/src/common_interfaces
+RUN git clone https://github.com/ros2/rosidl_python.git --branch $ROS_DISTRO /ros2_ws/src/rosidl_python
+RUN source /ros_entrypoint.sh && apt-get update && rosdep install --from-paths /ros2_ws/src --ignore-src --rosdistro $ROS_DISTRO -y
+RUN source /ros_entrypoint.sh && \
+    cd /ros2_ws && \
+    colcon build --parallel-workers $(nproc) && \
+    rm -r build log    
+RUN /bin/sed -i \
+  '/source "\/opt\/ros\/$ROS_DISTRO\/setup.bash"/a source "\/ros2_ws\/install\/local_setup.bash"' \
+  /ros_entrypoint.sh
+
+# Install HackRF ROS2 Packages
+RUN mkdir -p /hackrf_ws/src
+COPY ./ /hackrf_ws/src/hackrf_ros 
+RUN source /ros_entrypoint.sh && \
+    cd /hackrf_ws && \
+    colcon build --parallel-workers $(nproc) && \
+    rm -r build log
+
+# Update ros_entrypoint.sh
+RUN /bin/sed -i \
+  '/source "\/opt\/ros\/$ROS_DISTRO\/setup.bash"/a source "\/hackrf_ws\/install\/local_setup.bash"' \
+  /ros_entrypoint.sh
+
+RUN source /ros_entrypoint.sh

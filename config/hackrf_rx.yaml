@@ -1,0 +1,6 @@
+hackrf_node:
+  ros__parameters:
+    timer_period: 0.5
+    sample_rate: 20e6
+    center_freq: 88.5e6
+    num_samples: 2e6

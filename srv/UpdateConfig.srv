@@ -1,0 +1,5 @@
+int64 sample_rate
+int64 center_freq
+int64 num_samples
+---
+string confirmation
