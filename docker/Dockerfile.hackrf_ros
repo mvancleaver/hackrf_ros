@@ -15,18 +15,15 @@ RUN apt-get update && apt-get install -y \
 RUN locale-gen en_US.UTF-8
 SHELL ["/bin/bash", "-c"]
    
-#RUN python3 -m pip install -U --upgrade pip
 RUN python3 -m pip install -U numpy numpy-quaternion matplotlib
 RUN python3 -m pip install -U PyQt6 
-RUN python3 -m pip install -U python_hackrf 
 RUN python3 -m pip install -U pyhackrf
-RUN python3 -m pip install -U pyhackrf2
+#RUN python3 -m pip install -U pyhackrf2 python_hackrf 
 
-RUN mkdir -p /dev_util/
-RUN git clone https://github.com/portapack-mayhem/mayhem-firmware.git /dev_util/portapack-mayhem/mayhem-firmware
-RUN git clone https://github.com/dressel/pyhackrf.git /dev_util/pyhackrf
-RUN sed -i '525s/.*/    for i in range(0,4): /' /dev_util/pyhackrf/libhackrf.py
-
+# RUN mkdir -p /dev_util/
+# RUN git clone https://github.com/portapack-mayhem/mayhem-firmware.git /dev_util/portapack-mayhem/mayhem-firmware
+# RUN git clone https://github.com/dressel/pyhackrf.git /dev_util/pyhackrf
+# RUN sed -i '525s/.*/    for i in range(0,4): /' /dev_util/pyhackrf/libhackrf.py
 
 # Install General ROS2 Packages
 RUN mkdir -p /ros2_ws/src
@@ -48,8 +45,6 @@ RUN source /ros_entrypoint.sh && \
     cd /hackrf_ws && \
     colcon build --parallel-workers $(nproc) && \
     rm -r build log
-
-# Update ros_entrypoint.sh
 RUN /bin/sed -i \
   '/source "\/opt\/ros\/$ROS_DISTRO\/setup.bash"/a source "\/hackrf_ws\/install\/local_setup.bash"' \
   /ros_entrypoint.sh
