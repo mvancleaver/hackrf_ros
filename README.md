@@ -4,7 +4,7 @@ Basic ROS2 Wrapper to allow interacting with HackRF Devices
 ### Docker 
 
 This repo includes [`Dockerfile.hackrf_ros`](https://github.com/mvancleaver/hackrf_ros/blob/main/docker/Dockerfile.hackrf_ros)  to build the image and a [`docker-compose.yaml`](https://github.com/mvancleaver/hackrf_ros/blob/main/docker/cookbook/docker-compose.yaml) to run it. 
-It includes all publicaly available Hackrf python libraries :
+It includes the following publicaly available Hackrf python libraries :
 
 - [pyhackrf](https://pypi.org/project/pyhackrf/) (called in the ros node)
 - [pyhackrf2](https://pypi.org/project/pyhackrf2/)
