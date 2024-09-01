@@ -14,6 +14,7 @@ and is currently built with
 
 #### Usage
 
+    git clone https://github.com/mvancleaver/hackrf_ros.git
     cd hackrf_ros/docker/cookbook
     docker compose build hackrf_ros
 
