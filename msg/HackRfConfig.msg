@@ -1,3 +1,0 @@
-float64 sample_rate
-float64 center_freq
-float64 num_samples

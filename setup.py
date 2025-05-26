@@ -20,7 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'hackrf_node = hackrf_ros.hackrf_node:main'
+            'hackrf_node = hackrf_ros.hackrf_node:main',
+            'iq_plotter_node = hackrf_ros.iq_plotter_node:main'
         ],
     },
 )
