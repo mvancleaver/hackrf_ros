@@ -56,6 +56,61 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ## v2 Requirements
 
+Requirements for v2.0: Hardening, Observability & Signal Capabilities.
+
+### Error Handling & Validation
+
+- [ ] **ERR-01**: pymayhem raises typed exceptions (MayhemError hierarchy) instead of returning bool on command failures
+- [ ] **ERR-02**: hackrf_driver raises typed exceptions (HackRFError hierarchy) for config, device, and TX errors
+- [ ] **ERR-03**: All public pymayhem methods validate input parameters and raise ValueError on out-of-range values
+- [ ] **ERR-04**: All hackrf_driver config changes validate against PARAM_RANGES before touching hardware
+- [ ] **ERR-05**: Exception dispatch boundary in redis_bridge catches pymayhem/hackrf exceptions and maps to structured Redis error state
+
+### Reliability
+
+- [ ] **REL-01**: Device health watchdog detects USB stall (no RX data for 10s) and triggers automatic reconnect without deadlocking _device_lock
+- [ ] **REL-02**: BridgeNode survives Redis restart — exponential backoff retry loop with automatic resubscribe to Pub/Sub channels
+- [ ] **REL-03**: Every IQ XADD entry includes a monotonic sequence number; consumers can detect dropped buffers
+
+### Observability
+
+- [ ] **OBS-01**: hackrf:metrics Redis hash publishes IQ throughput (chunks/sec), error counts, queue depths, and uptime at 1 Hz
+- [ ] **OBS-02**: Failed Redis commands archived to hackrf:cmd:dlq stream (MAXLEN=500) with error context and timestamp
+- [ ] **OBS-03**: BridgeNode publishes /hackrf/metrics ROS2 topic with same data as hackrf:metrics hash
+
+### TX Safety
+
+- [ ] **TXS-01**: validate_tx() checks all four TX guards (antenna, hard-block, freq filter, auth existence) without consuming the auth token
+- [ ] **TXS-02**: BridgeNode exposes /hackrf/confirm_antenna ROS2 service that sets the Redis antenna confirmation key
+- [ ] **TXS-03**: TXController periodically re-reads antenna confirmation key (not just at init)
+
+### IQ Recording
+
+- [ ] **REC-01**: Redis record_start command begins recording IQ to a SigMF file (.sigmf-data + .sigmf-meta) in a configurable directory
+- [ ] **REC-02**: Redis record_stop command stops recording and finalizes SigMF metadata (datatype, sample_rate, frequency, datetime)
+- [ ] **REC-03**: Recording runs in a dedicated thread with its own bounded queue — does not block the IQ pipeline
+- [ ] **REC-04**: Sequence number gaps during recording are noted as new SigMF capture entries with correct sample_start offset
+
+### Spectral Analysis
+
+- [ ] **FFT-01**: Headless FFT/PSD computed in a dedicated thread at configurable rate (default 10 Hz, max 50 Hz)
+- [ ] **FFT-02**: Power spectrum published to hackrf:spectrum Redis stream with float32 PSD bins
+- [ ] **FFT-03**: /hackrf/spectrum ROS2 topic published by BridgeNode via Pub/Sub subscription (mirrors IQ topic pattern)
+- [ ] **FFT-04**: Waterfall history maintained in hackrf:waterfall Redis list (rolling 200-row window via LPUSH + LTRIM)
+
+### Frequency Hopping
+
+- [ ] **HOP-01**: Redis hop_start command accepts a frequency list and dwell time (minimum 100ms) and begins programmable scanning
+- [ ] **HOP-02**: Redis hop_stop command halts the hop sequence and holds current frequency
+- [ ] **HOP-03**: Hop scheduler checks _is_transmitting before each hop — backs off without advancing if TX is active
+- [ ] **HOP-04**: Current hop state (active, current_freq, dwell_ms, hop_index) reflected in hackrf:state hash
+
+### Legacy Cleanup
+
+- [ ] **LEG-01**: HackRFNode marked deprecated with docstring and log warning pointing users to hackrf_driver + BridgeNode
+
+## v3 Requirements
+
 Deferred to future release. Tracked but not in current roadmap.
 
 ### Advanced Mayhem
@@ -70,10 +125,10 @@ Deferred to future release. Tracked but not in current roadmap.
 - **ARCH-02**: Redis consumer group support for multiple downstream consumers
 - **ARCH-03**: Graceful degradation: continue on ROS2 topics if Redis unreachable
 
-### Observability
+### Async API
 
-- **OBS-01**: Redis-based metrics (sample rate, buffer depth, drop count)
-- **OBS-02**: Health check endpoint via Redis key with TTL heartbeat
+- **ASYNC-01**: pymayhem async API (AsyncMayhemClient) with asyncio serial transport
+- **ASYNC-02**: Event loop ownership contract for ROS2/asyncio coexistence
 
 ## Out of Scope
 
@@ -83,7 +138,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | Signal processing / demodulation | Out of scope for driver layer |
 | Multi-device support | Single HackRF One target |
 | Custom Mayhem firmware mods | Work with existing Mayhem serial protocol |
-| pyserial-asyncio | Driver uses threads, not asyncio event loop |
+| Persistent always-on recording | 160 MB/s fills disk in minutes; trigger-based only |
+| Automatic demodulation | Belongs in consumer layer, not driver |
+| Frequency hopping during active TX | Half-duplex hardware constraint |
+| asyncio port of hackrf_driver core | libusb callbacks are not async-safe |
 | OAuth / web auth for TX | Redis GETDEL token is sufficient for single-user driver |
 
 ## Traceability
@@ -126,11 +184,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REF-07 | Phase 5 | Complete |
 
 **Coverage:**
-- v1 requirements: 25 total (all complete)
-- Refactor requirements: 7 total (Phase 5)
-- Mapped to phases: 32
-- Unmapped: 0
+- v1 requirements: 32 total (all complete)
+- v2 requirements: 24 total (pending)
+- Mapped to phases: 32 (v1), 0 (v2 — awaiting roadmap)
+- Unmapped: 24 ⚠️
 
 ---
 *Requirements defined: 2026-03-29*
-*Last updated: 2026-03-30 after Phase 5 addition*
+*Last updated: 2026-03-30 after v2.0 milestone definition*
