@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 
+import json
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rcl_interfaces.msg import SetParametersResult
 from std_msgs.msg import Float32MultiArray  # Using standard message for IQ data
+from std_msgs.msg import String
 from rcl_interfaces.msg import ParameterDescriptor  # For parameter descriptions
+from std_srvs.srv import Trigger
+from hackrf_ros_interfaces.srv import AppStart, SetFreq
+from hackrf_ros.mayhem_serial import MayhemSerial
 
 import pyhackrf2  # The Python binding for libhackrf
 import numpy as np
@@ -48,6 +53,11 @@ class HackRFNode(Node):
         self._reconnect_delay = _MIN_RECONNECT_DELAY
         self._reconnect_timer = None
 
+        # Serial reconnect state (D-10: mirrors pyhackrf2 backoff)
+        self._serial_reconnect_delay = _MIN_RECONNECT_DELAY
+        self._serial_reconnect_timer = None
+        self._serial_connected = False
+
         # --- 1. Declare ROS 2 Parameters for HackRF Configuration ---
         # Center Frequency (Hz)
         self.declare_parameter(
@@ -84,6 +94,15 @@ class HackRFNode(Node):
             ParameterDescriptor(description='RF amplifier enabled (true/false)', read_only=False)
         )
 
+        self.declare_parameter(
+            'serial_port', '/dev/ttyACM1',
+            ParameterDescriptor(description='Mayhem serial port path (D-03)', read_only=False)
+        )
+        self.declare_parameter(
+            'serial_command_timeout', 3.0,
+            ParameterDescriptor(description='Mayhem command timeout in seconds (D-11)', read_only=False)
+        )
+
         # Populate _last_params from declared parameters (D-07)
         self._last_params = {
             'center_frequency': self.get_parameter('center_frequency').get_parameter_value().double_value,
@@ -96,6 +115,12 @@ class HackRFNode(Node):
         # --- 2. Setup Parameter Event Handler ---
         self.add_on_set_parameters_callback(self._on_parameter_event)
 
+        # --- Phase 2: MayhemSerial (D-01) ---
+        _serial_port = self.get_parameter('serial_port').get_parameter_value().string_value
+        _cmd_timeout = self.get_parameter('serial_command_timeout').get_parameter_value().double_value
+        self._mayhem = MayhemSerial(_serial_port, self.get_logger(), timeout=_cmd_timeout)
+        self._try_serial_connect()
+
         # --- 3. Create ROS 2 Publisher ---
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -105,6 +130,16 @@ class HackRFNode(Node):
         self.publisher_ = self.create_publisher(Float32MultiArray, '/hackrf/iq', qos_profile)
         self.get_logger().info("Publisher created on topic '/hackrf/iq' (std_msgs/msg/Float32MultiArray).")
 
+        # Phase 2: services (D-07)
+        self._srv_appstart = self.create_service(AppStart, 'hackrf/appstart', self._handle_appstart)
+        self._srv_setfreq = self.create_service(SetFreq, 'hackrf/setfreq', self._handle_setfreq)
+        self._srv_radioinfo = self.create_service(Trigger, 'hackrf/radioinfo', self._handle_radioinfo)
+        self.get_logger().info("Mayhem services registered: hackrf/appstart, hackrf/setfreq, hackrf/radioinfo")
+
+        # Phase 2: status topic (D-08)
+        self._mayhem_status_pub = self.create_publisher(String, '/hackrf/mayhem_status', 10)
+        self._status_timer = self.create_timer(5.0, self._publish_mayhem_status)
+
         # --- 4. Initialize HackRF Device (via reconnect loop) ---
         self._try_connect()
 
@@ -112,6 +147,9 @@ class HackRFNode(Node):
         self.timer_period = 0.005  # seconds
         self.timer = self.create_timer(self.timer_period, self._publish_iq)
         self.get_logger().info(f"Data acquisition timer set to {self.timer_period} seconds.")
+
+        # Phase 2: MAY-06 empirical mode coexistence check
+        self._verify_mode_coexistence()
 
     def _try_connect(self) -> None:
         """Attempt to open HackRF. On failure, schedule retry with exponential backoff. (D-06, D-08)"""
@@ -153,6 +191,164 @@ class HackRFNode(Node):
             self._reconnect_timer.cancel()
             self._reconnect_timer = None
         self._try_connect()
+
+    def _try_serial_connect(self) -> None:
+        """Open serial port; on failure schedule retry with exponential backoff (D-10, MAY-01)."""
+        if self._mayhem.open():
+            self._serial_connected = True
+            self._serial_reconnect_delay = _MIN_RECONNECT_DELAY  # reset on success
+            self.get_logger().info("MayhemSerial connected.")
+            # D-09: query applist at startup, no hardcoded names
+            try:
+                apps = self._mayhem.query_applist()
+                self.get_logger().info(f"Mayhem apps discovered: {apps}")
+            except Exception as e:
+                self.get_logger().warning(f"applist query failed at startup: {e}")
+        else:
+            self._serial_connected = False
+            self.get_logger().error(
+                f"Serial open failed. Retrying in {self._serial_reconnect_delay:.0f}s."
+            )
+            self._serial_reconnect_timer = self.create_timer(
+                self._serial_reconnect_delay, self._serial_reconnect_callback
+            )
+            self._serial_reconnect_delay = min(
+                self._serial_reconnect_delay * 2, _MAX_RECONNECT_DELAY
+            )
+
+    def _serial_reconnect_callback(self) -> None:
+        """Timer callback: cancel this timer, attempt serial reconnect (D-10)."""
+        if self._serial_reconnect_timer:
+            self._serial_reconnect_timer.cancel()
+            self._serial_reconnect_timer = None
+        self._try_serial_connect()
+
+    def _verify_mode_coexistence(self) -> None:
+        """MAY-06: Empirically confirm pyhackrf2 and Mayhem serial coexist at startup.
+
+        Logs CONFIRMED if both operational; logs MODE CONFLICT error if incompatible.
+        Per D-06: never silently degrade.
+        """
+        serial_ok = False
+        hackrf_ok = self.is_hackrf_streaming
+
+        if self._serial_connected:
+            try:
+                info = self._mayhem.radioinfo()
+                serial_ok = bool(info)
+            except Exception as e:
+                self.get_logger().error(f"MAY-06: serial radioinfo probe failed: {e}")
+
+        if hackrf_ok and serial_ok:
+            self.get_logger().info(
+                "MAY-06: Mode coexistence CONFIRMED — pyhackrf2 streaming and Mayhem serial both operational."
+            )
+        elif hackrf_ok and not serial_ok:
+            self.get_logger().error(
+                "MAY-06: MODE CONFLICT — pyhackrf2 is streaming but Mayhem serial is unresponsive. "
+                "Device may be in HackRF mode. Reboot PortaPack; do NOT press the HackRF hardware button."
+            )
+        elif not hackrf_ok and serial_ok:
+            self.get_logger().warning(
+                "MAY-06: pyhackrf2 not yet streaming (reconnecting) but serial is operational. "
+                "Mode conflict cannot be confirmed until pyhackrf2 reconnects."
+            )
+        else:
+            self.get_logger().warning(
+                "MAY-06: Both interfaces unavailable at startup — cannot assess mode conflict."
+            )
+
+    def _handle_appstart(self, request, response):
+        """ROS2 service handler for hackrf/appstart (D-07, MAY-03)."""
+        if not self._serial_connected:
+            response.success = False
+            response.message = "Serial not connected"
+            return response
+        try:
+            ok = self._mayhem.appstart(request.app_name)
+            response.success = ok
+            response.message = f"appstart {request.app_name}: {'ok' if ok else 'error from device'}"
+        except TimeoutError as e:
+            response.success = False
+            response.message = f"appstart timeout: {e}"
+            self.get_logger().warning(f"_handle_appstart timeout: {e}")
+        except Exception as e:
+            response.success = False
+            response.message = f"appstart error: {e}"
+            self.get_logger().error(f"_handle_appstart unexpected error: {e}")
+        return response
+
+    def _handle_setfreq(self, request, response):
+        """ROS2 service handler for hackrf/setfreq (D-07, MAY-04)."""
+        if not self._serial_connected:
+            response.success = False
+            response.message = "Serial not connected"
+            response.confirmed_hz = 0
+            return response
+        try:
+            ok = self._mayhem.setfreq(int(request.freq_hz))
+            response.success = ok
+            response.message = f"setfreq {request.freq_hz}: {'ok' if ok else 'error from device'}"
+            # Confirm by querying radioinfo (MAY-05 — verify after set)
+            if ok:
+                try:
+                    info = self._mayhem.radioinfo()
+                    confirmed = int(info.get('freq', 0)) if info else 0
+                except Exception:
+                    confirmed = 0
+                response.confirmed_hz = confirmed
+            else:
+                response.confirmed_hz = 0
+        except TimeoutError as e:
+            response.success = False
+            response.message = f"setfreq timeout: {e}"
+            response.confirmed_hz = 0
+            self.get_logger().warning(f"_handle_setfreq timeout: {e}")
+        except Exception as e:
+            response.success = False
+            response.message = f"setfreq error: {e}"
+            response.confirmed_hz = 0
+            self.get_logger().error(f"_handle_setfreq unexpected error: {e}")
+        return response
+
+    def _handle_radioinfo(self, request, response):
+        """ROS2 service handler for hackrf/radioinfo (D-07, MAY-05)."""
+        if not self._serial_connected:
+            response.success = False
+            response.message = "Serial not connected"
+            return response
+        try:
+            info = self._mayhem.radioinfo()
+            response.success = bool(info)
+            response.message = json.dumps(info)
+        except TimeoutError as e:
+            response.success = False
+            response.message = f"radioinfo timeout: {e}"
+            self.get_logger().warning(f"_handle_radioinfo timeout: {e}")
+        except Exception as e:
+            response.success = False
+            response.message = f"radioinfo error: {e}"
+            self.get_logger().error(f"_handle_radioinfo unexpected error: {e}")
+        return response
+
+    def _publish_mayhem_status(self) -> None:
+        """Timer callback: publish Mayhem state to /hackrf/mayhem_status every 5s (D-08, D-09)."""
+        status = {
+            "serial_connected": self._serial_connected,
+            "known_apps": self._mayhem._known_apps if self._serial_connected else [],
+            "needs_reconnect": self._mayhem.needs_reconnect if self._serial_connected else False,
+        }
+        msg = String()
+        msg.data = json.dumps(status)
+        self._mayhem_status_pub.publish(msg)
+        # Trigger reconnect if reader thread died (D-10)
+        if self._serial_connected and self._mayhem.needs_reconnect:
+            self.get_logger().warning("MayhemSerial reader thread died — scheduling reconnect.")
+            self._serial_connected = False
+            self._serial_reconnect_timer = self.create_timer(
+                self._serial_reconnect_delay, self._serial_reconnect_callback
+            )
+            self._serial_reconnect_delay = min(self._serial_reconnect_delay * 2, _MAX_RECONNECT_DELAY)
 
     def _apply_last_params(self) -> None:
         """Apply stored parameters to _hackrf device. Called after reconnect. (D-07)"""
@@ -269,6 +465,16 @@ class HackRFNode(Node):
     def destroy_node(self) -> None:
         """Stop streaming, close device, cancel timers. (RX-06)"""
         self.get_logger().info("HackRFNode shutting down...")
+        # Close serial before pyhackrf2 (CONTEXT.md integration point)
+        if self._serial_reconnect_timer:
+            self._serial_reconnect_timer.cancel()
+            self._serial_reconnect_timer = None
+        if hasattr(self, '_mayhem') and self._serial_connected:
+            try:
+                self._mayhem.close()
+                self.get_logger().info("MayhemSerial closed.")
+            except Exception as e:
+                self.get_logger().error(f"MayhemSerial close failed: {e}")
         if self._reconnect_timer:
             self._reconnect_timer.cancel()
             self._reconnect_timer = None
