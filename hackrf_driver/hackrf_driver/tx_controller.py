@@ -251,6 +251,69 @@ class TXController:
                 f'iq_len={len(iq_bytes)}'
             )
 
+    def validate_tx(self, freq_hz: int) -> dict:
+        """Check all TX guards without consuming auth token or touching hardware.
+
+        Checks guards in the same order as start_tx:
+          1. Antenna confirmed
+          2. Hard-blocked band
+          3. Frequency filter + restricted
+          4. Auth token EXISTS (GET, not GETDEL -- token is NOT consumed)
+
+        This is a pure read-only pre-flight check. A subsequent start_tx() with
+        the same auth token will still succeed if validate_tx returned valid=True.
+
+        Args:
+            freq_hz: Center frequency in Hz to validate.
+
+        Returns:
+            dict with keys:
+                'valid': bool -- True if all guards would pass
+                'blocking_guard': str | None -- name of first failing guard
+                'detail': str -- human-readable explanation
+        """
+        # Guard 1: antenna
+        if not self._antenna_confirmed:
+            return {
+                'valid': False,
+                'blocking_guard': 'antenna',
+                'detail': 'Antenna not confirmed',
+            }
+        # Guard 2: hard-blocked
+        if self._is_hard_blocked(freq_hz):
+            return {
+                'valid': False,
+                'blocking_guard': 'hard_block',
+                'detail': f'{freq_hz} Hz is on an always-blocked band (EPIRB/ADS-B)',
+            }
+        # Guard 3: freq filter
+        if self._freq_filter_active() and self._is_freq_restricted(freq_hz):
+            return {
+                'valid': False,
+                'blocking_guard': 'freq_filter',
+                'detail': f'{freq_hz} Hz is restricted and frequency filter is active',
+            }
+        # Guard 4: auth token EXISTS (GET, not GETDEL -- per D-05)
+        try:
+            val = self._redis.get(self.AUTH_KEY)
+        except Exception:
+            return {
+                'valid': False,
+                'blocking_guard': 'auth_token',
+                'detail': 'Redis error checking auth token',
+            }
+        if val is None:
+            return {
+                'valid': False,
+                'blocking_guard': 'auth_token',
+                'detail': 'No auth token present in Redis',
+            }
+        return {
+            'valid': True,
+            'blocking_guard': None,
+            'detail': 'All guards pass',
+        }
+
     def stop_tx(self) -> None:
         """Stop active transmission and resume RX.
 
