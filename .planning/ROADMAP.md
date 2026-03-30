@@ -28,7 +28,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. When the HackRF is unplugged and replugged, the driver reconnects automatically without a node restart
   3. Setting frequency, gain, or sample rate to an out-of-range value produces a clear error log and leaves the device unchanged
   4. The node starts up, streams IQ, and shuts down cleanly with no deadlocks and no bare print statements in the log
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Replace buffer with dual queues, strip RX callback, fix publish consumer (RX-01, RX-07)
+- [ ] 01-02-PLAN.md — Reconnect loop with exponential backoff, deadlock guard, lifecycle shutdown (RX-02, RX-05, RX-06)
+- [ ] 01-03-PLAN.md — Parameter validation, class rename, logging cleanup, plotter/config/setup alignment (RX-03, RX-04)
 
 ### Phase 2: Mayhem Serial Interface
 **Goal**: The driver communicates with Mayhem firmware over serial, can discover and switch apps, update frequency, and confirm the mode-conflict answer empirically
@@ -70,7 +75,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. RX Pipeline Correctness | 0/? | Not started | - |
+| 1. RX Pipeline Correctness | 0/3 | In progress | - |
 | 2. Mayhem Serial Interface | 0/? | Not started | - |
 | 3. Redis Bridge | 0/? | Not started | - |
 | 4. TX Authorization | 0/? | Not started | - |
