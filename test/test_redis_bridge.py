@@ -26,7 +26,7 @@ class _Logger:
         self.errors.append(msg)
 
 
-from hackrf_ros.redis_bridge import RedisBridge
+from hackrf_driver.redis_bridge import RedisBridge
 
 
 class TestRedisBridgeOpen(unittest.TestCase):
@@ -39,7 +39,7 @@ class TestRedisBridgeOpen(unittest.TestCase):
 
     def test_open_returns_false_on_connection_error(self):
         """open() returns False when Redis is unreachable; does not propagate exception."""
-        with patch('hackrf_ros.redis_bridge.redis.Redis') as MockRedis:
+        with patch('hackrf_driver.redis_bridge.redis.Redis') as MockRedis:
             mock_client = MockRedis.return_value
             mock_client.ping.side_effect = redis.exceptions.ConnectionError('refused')
             bridge = RedisBridge(self.q, self.node, self.logger)
@@ -49,7 +49,7 @@ class TestRedisBridgeOpen(unittest.TestCase):
 
     def test_open_returns_true_and_starts_thread_when_ping_succeeds(self):
         """open() returns True and daemon thread is alive when ping succeeds."""
-        with patch('hackrf_ros.redis_bridge.redis.Redis') as MockRedis:
+        with patch('hackrf_driver.redis_bridge.redis.Redis') as MockRedis:
             mock_client = MockRedis.return_value
             mock_client.ping.return_value = True
             # Prevent bridge loop from running
@@ -221,7 +221,7 @@ class TestRedisBridgeCloseAndReconnect(unittest.TestCase):
 
     def test_close_sets_stop_event(self):
         """close() sets _stop_event."""
-        with patch('hackrf_ros.redis_bridge.redis.Redis') as MockRedis:
+        with patch('hackrf_driver.redis_bridge.redis.Redis') as MockRedis:
             mock_client = MockRedis.return_value
             mock_client.ping.return_value = True
             bridge = RedisBridge(self.q, self.node, self.logger)

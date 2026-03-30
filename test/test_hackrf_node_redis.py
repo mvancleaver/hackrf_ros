@@ -34,42 +34,74 @@ class _FakeNode:
         pass
 
 
-mock_rclpy_node_module = MagicMock()
-mock_rclpy_node_module.Node = _FakeNode
+# Module keys to mock — saved/restored in setUpModule/tearDownModule
+_MOCK_MODULE_KEYS = [
+    'rclpy', 'rclpy.node', 'rclpy.qos', 'rclpy.parameter', 'rclpy.exceptions',
+    'rcl_interfaces', 'rcl_interfaces.msg',
+    'std_msgs', 'std_msgs.msg',
+    'std_srvs', 'std_srvs.srv',
+    'redis', 'redis.exceptions',
+    'pyhackrf2', 'serial',
+    'hackrf_ros_interfaces', 'hackrf_ros_interfaces.srv',
+    'hackrf_ros.bridge_node', 'hackrf_ros.bridge_services',
+]
+_ORIGINAL_MODULES = {}
 
-mock_rclpy = MagicMock()
-mock_rclpy.node = mock_rclpy_node_module
-sys.modules['rclpy'] = mock_rclpy
-sys.modules['rclpy.node'] = mock_rclpy_node_module
-sys.modules['rclpy.qos'] = MagicMock()
-sys.modules['rclpy.parameter'] = MagicMock()
-sys.modules['rclpy.exceptions'] = MagicMock()
-sys.modules['rcl_interfaces'] = MagicMock()
-sys.modules['rcl_interfaces.msg'] = MagicMock()
 
-# Set up Float32MultiArray and String as simple classes so isinstance() checks work
-_Float32MultiArray = type('Float32MultiArray', (), {'data': []})
-_String = type('String', (), {'data': ''})
+def setUpModule():
+    """Install sys.modules mocks before any test in this file runs."""
+    # Save originals
+    for key in _MOCK_MODULE_KEYS:
+        _ORIGINAL_MODULES[key] = sys.modules.get(key)
 
-mock_std_msgs_msg = MagicMock()
-mock_std_msgs_msg.Float32MultiArray = _Float32MultiArray
-mock_std_msgs_msg.String = _String
-sys.modules['std_msgs'] = MagicMock()
-sys.modules['std_msgs.msg'] = mock_std_msgs_msg
+    # Remove cached hackrf_ros bridge modules so they get re-imported with mocks
+    for key in list(sys.modules.keys()):
+        if key.startswith('hackrf_ros.bridge'):
+            sys.modules.pop(key, None)
 
-sys.modules['std_srvs'] = MagicMock()
-sys.modules['std_srvs.srv'] = MagicMock()
+    mock_rclpy_node_module = MagicMock()
+    mock_rclpy_node_module.Node = _FakeNode
 
-# Mock redis
-mock_redis_module = MagicMock()
-sys.modules['redis'] = mock_redis_module
-sys.modules['redis.exceptions'] = MagicMock()
+    mock_rclpy = MagicMock()
+    mock_rclpy.node = mock_rclpy_node_module
+    sys.modules['rclpy'] = mock_rclpy
+    sys.modules['rclpy.node'] = mock_rclpy_node_module
+    sys.modules['rclpy.qos'] = MagicMock()
+    sys.modules['rclpy.parameter'] = MagicMock()
+    sys.modules['rclpy.exceptions'] = MagicMock()
+    sys.modules['rcl_interfaces'] = MagicMock()
+    sys.modules['rcl_interfaces.msg'] = MagicMock()
 
-# Mock pyhackrf2 (must not be imported by bridge)
-sys.modules['pyhackrf2'] = MagicMock()
-sys.modules['serial'] = MagicMock()
-sys.modules['hackrf_ros_interfaces'] = MagicMock()
-sys.modules['hackrf_ros_interfaces.srv'] = MagicMock()
+    # Set up Float32MultiArray and String as simple classes so isinstance() works
+    _Float32MultiArray = type('Float32MultiArray', (), {'data': []})
+    _String = type('String', (), {'data': ''})
+    mock_std_msgs_msg = MagicMock()
+    mock_std_msgs_msg.Float32MultiArray = _Float32MultiArray
+    mock_std_msgs_msg.String = _String
+    sys.modules['std_msgs'] = MagicMock()
+    sys.modules['std_msgs.msg'] = mock_std_msgs_msg
+
+    sys.modules['std_srvs'] = MagicMock()
+    sys.modules['std_srvs.srv'] = MagicMock()
+
+    # Mock redis
+    sys.modules['redis'] = MagicMock()
+    sys.modules['redis.exceptions'] = MagicMock()
+
+    # Mock pyhackrf2 and serial (must not be imported by bridge)
+    sys.modules['pyhackrf2'] = MagicMock()
+    sys.modules['serial'] = MagicMock()
+    sys.modules['hackrf_ros_interfaces'] = MagicMock()
+    sys.modules['hackrf_ros_interfaces.srv'] = MagicMock()
+
+
+def tearDownModule():
+    """Restore sys.modules to original state after all tests in this file run."""
+    for key, original in _ORIGINAL_MODULES.items():
+        if original is None:
+            sys.modules.pop(key, None)
+        else:
+            sys.modules[key] = original
 
 
 # ---------------------------------------------------------------------------

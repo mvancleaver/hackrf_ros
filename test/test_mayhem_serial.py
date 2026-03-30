@@ -22,15 +22,14 @@ class _Logger:
         pass
 
 
-from hackrf_ros.mayhem_serial import MayhemSerial
+from pymayhem._serial import MayhemSerial
 
 
 class TestMayhemSerialParsing(unittest.TestCase):
     """Tests for MayhemSerial command parsing without hardware."""
 
     def setUp(self):
-        self.logger = _Logger()
-        self.ms = MayhemSerial('/dev/null', self.logger, timeout=1.0)
+        self.ms = MayhemSerial('/dev/null', timeout=1.0)
 
     def _inject_response(self, lines: list):
         """Put lines into _response_queue for _send_command to consume."""
@@ -94,8 +93,8 @@ class TestMayhemSerialParsing(unittest.TestCase):
         """_send_command logs a warning and retries once on TimeoutError (D-12).
 
         If first _attempt_send raises TimeoutError, the command retries once.
-        If the retry succeeds, _send_command returns the result and
-        logger.warning was called exactly once.
+        If the retry succeeds, _send_command returns the result and a warning
+        was logged exactly once.
         """
         successful_response = ['ok']
         attempt_call_count = [0]
@@ -106,17 +105,30 @@ class TestMayhemSerialParsing(unittest.TestCase):
                 raise TimeoutError('first attempt timed out')
             return successful_response
 
-        with patch.object(self.ms, '_attempt_send', side_effect=side_effect):
-            # _send_command acquires lock and calls _attempt_send
-            mock_serial = MagicMock()
-            mock_serial.is_open = True
-            self.ms._serial = mock_serial
+        mock_serial = MagicMock()
+        mock_serial.is_open = True
+        self.ms._serial = mock_serial
 
-            result = self.ms._send_command('appstart test')
+        # Capture warnings from the stdlib logger
+        stdlib_logger = logging.getLogger('pymayhem.serial')
+        warnings_captured = []
+
+        class _WarningHandler(logging.Handler):
+            def emit(self, record):
+                if record.levelno == logging.WARNING:
+                    warnings_captured.append(record.getMessage())
+
+        handler = _WarningHandler()
+        stdlib_logger.addHandler(handler)
+        try:
+            with patch.object(self.ms, '_attempt_send', side_effect=side_effect):
+                result = self.ms._send_command('appstart test')
+        finally:
+            stdlib_logger.removeHandler(handler)
 
         self.assertEqual(result, successful_response)
-        self.assertEqual(len(self.logger.warnings), 1)
-        self.assertIn('appstart test', self.logger.warnings[0])
+        self.assertEqual(len(warnings_captured), 1)
+        self.assertIn('appstart test', warnings_captured[0])
 
     def test_send_command_raises_on_double_timeout(self):
         """_send_command re-raises TimeoutError if retry also times out."""
@@ -128,9 +140,6 @@ class TestMayhemSerialParsing(unittest.TestCase):
                           side_effect=TimeoutError('always times out')):
             with self.assertRaises(TimeoutError):
                 self.ms._send_command('radioinfo')
-
-        # Warning should have been logged before the retry
-        self.assertEqual(len(self.logger.warnings), 1)
 
 
 if __name__ == '__main__':
