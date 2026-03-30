@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: "Completed 04-02-PLAN.md (TX integration) — checkpoint:human-verify pending"
-last_updated: "2026-03-30T06:44:49.321Z"
+stopped_at: Completed 04-02-PLAN.md — TX pipeline integration complete, all 68 tests pass, milestone v1.0 done
+last_updated: "2026-03-30T06:52:42.554Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 4
@@ -62,6 +62,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-redis-bridge P02 | 8min | 2 tasks | 3 files |
 | Phase 04-tx-authorization P01 | 3min | 2 tasks | 2 files |
 | Phase 04-tx-authorization P02 | 8min | 2 tasks | 3 files |
+| Phase 04-tx-authorization P02 | 10min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,9 @@ Recent decisions affecting current work:
 - [Phase 03-redis-bridge]: _start_time recorded once in __init__ for stable uptime_s in _build_state_dict
 - [Phase 04-tx-authorization]: ALWAYS_BLOCKED_BANDS checked unconditionally — EPIRB/ADS-B cannot be bypassed; guard order: antenna->hard-block->freq-filter->auth token; Lua GETDEL fallback for Redis 6.0.16; _tx_lock is Lock (not RLock); txvga_gain default=0
 - [Phase 04-tx-authorization]: TXController wired into HackRFNode after RedisBridge.open(); TX stop first in destroy_node (TX-06); _handle_start_tx as module-level function to access Redis IQ key
+- [Phase 04-tx-authorization]: _handle_start_tx as module-level function to access Redis IQ key via node._redis_bridge._redis
+- [Phase 04-tx-authorization]: TXHardBlockedError not caught in _handle_start_tx — propagates to generic error handler at error level (EPIRB/ADS-B blocks are unconditional law violations, not warnings)
+- [Phase 04-tx-authorization]: _last_tx_freq attribute added to TXController.start_tx() for state dict tracking without changing guard logic
 
 ### Pending Todos
 
@@ -97,6 +101,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T06:44:49.318Z
-Stopped at: Completed 04-02-PLAN.md (TX integration) — checkpoint:human-verify pending
+Last session: 2026-03-30T06:52:42.551Z
+Stopped at: Completed 04-02-PLAN.md — TX pipeline integration complete, all 68 tests pass, milestone v1.0 done
 Resume file: None
