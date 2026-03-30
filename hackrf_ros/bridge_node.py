@@ -14,6 +14,9 @@ import threading
 
 import numpy as np
 
+_MIN_BACKOFF = 1.0   # D-07: exponential backoff start (seconds)
+_MAX_BACKOFF = 30.0  # D-07: exponential backoff ceiling (seconds)
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -106,41 +109,53 @@ class BridgeNode(Node):
         self.get_logger().info('BridgeNode initialisation complete.')
 
     def _bridge_loop(self):
-        """Subscribe to hackrf:iq:notify and publish IQ + state on each notification.
+        """Subscribe to hackrf:iq:notify with auto-reconnect on Redis errors.
 
-        Uses pubsub.get_message(timeout=0.1) in a polling loop so _stop_event
-        is checked regularly (avoids blocking on pubsub.listen() forever).
+        Outer loop handles reconnection with exponential backoff (1s-30s).
+        Inner loop (_run_pubsub_loop) processes messages — raises on Redis error
+        to trigger outer reconnect.
         """
         if self._redis is None:
             self.get_logger().warning('BridgeNode._bridge_loop: no Redis connection, exiting.')
             return
 
-        try:
-            pubsub = self._redis.pubsub()
-            pubsub.subscribe('hackrf:iq:notify')
-        except Exception as e:
-            self.get_logger().warning(f'BridgeNode._bridge_loop: subscribe failed: {e}')
-            return
-
+        backoff = _MIN_BACKOFF
         while not self._stop_event.is_set():
+            pubsub = None
             try:
-                msg = pubsub.get_message(timeout=0.1)
+                pubsub = self._redis.pubsub()
+                pubsub.subscribe('hackrf:iq:notify')
+                self.get_logger().info('BridgeNode: subscribed to hackrf:iq:notify')
+                backoff = _MIN_BACKOFF  # reset on successful connect
+                self._publish_state()  # flush state immediately after reconnect
+                self._run_pubsub_loop(pubsub)
             except Exception as e:
-                self.get_logger().warning(f'BridgeNode._bridge_loop: get_message error: {e}')
-                break
+                self.get_logger().warning(
+                    f'BridgeNode: Redis error: {e}. Retrying in {backoff:.0f}s.'
+                )
+            finally:
+                if pubsub is not None:
+                    try:
+                        pubsub.close()
+                    except Exception:
+                        pass
+            if self._stop_event.wait(backoff):
+                break  # stop requested during backoff
+            backoff = min(backoff * 2, _MAX_BACKOFF)
 
+        self.get_logger().info('BridgeNode: bridge loop exited.')
+
+    def _run_pubsub_loop(self, pubsub):
+        """Inner loop — raises on Redis error to trigger outer reconnect."""
+        while not self._stop_event.is_set():
+            msg = pubsub.get_message(timeout=0.1)  # raises on Redis error
             if msg is None:
                 continue
             if msg['type'] != 'message':
                 continue
 
             # Get latest IQ entry from stream
-            try:
-                entries = self._redis.xrevrange('hackrf:iq:stream', '+', '-', count=1)
-            except Exception as e:
-                self.get_logger().warning(f'BridgeNode: xrevrange failed: {e}')
-                continue
-
+            entries = self._redis.xrevrange('hackrf:iq:stream', '+', '-', count=1)
             if not entries:
                 continue
 
@@ -156,12 +171,6 @@ class BridgeNode(Node):
 
             # Also update state after each IQ publish
             self._publish_state()
-
-        try:
-            pubsub.unsubscribe()
-            pubsub.close()
-        except Exception:
-            pass
 
     def _publish_state(self):
         """Read hackrf:state hash and publish JSON to /hackrf/state topic."""
