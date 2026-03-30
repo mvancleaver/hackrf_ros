@@ -16,10 +16,12 @@ Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX 
 - v ROS2 parameter-based device configuration (frequency, gain, sample rate) — existing
 - v Real-time IQ visualization node (plotter) — existing
 - v Docker deployment with USB device passthrough — existing
+- v Robust RX pipeline: thread-safe dual-queue buffering, USB error recovery with exponential backoff, automatic reconnection — Phase 1
+- v Proper conventions: HackRFNode class, structured logging, parameter validation (hardware ranges), no bare print() — Phase 1
+- v Graceful lifecycle management: clean startup without device, ordered shutdown, deadlock-safe reconfiguration — Phase 1
 
 ### Active
 
-- [ ] Robust RX pipeline: pyhackrf2-based IQ streaming with thread-safe buffering, error recovery, and reconnection
 - [ ] Redis IQ publishing: stream raw IQ samples to Redis on the host
 - [ ] Redis device state: publish device configuration and status (frequency, gain, streaming state) to Redis
 - [ ] Redis command interface: control HackRF configuration (frequency, gain, sample rate, bandwidth) via Redis
@@ -27,8 +29,6 @@ Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX 
 - [ ] TX capability: transmit signals via Mayhem firmware with configurable parameters
 - [ ] TX authorization guardrails: TX commands require explicit authorization before execution
 - [ ] Mayhem app management: start/stop Mayhem apps (capture, replay, scanner, etc.) via serial commands
-- [ ] Proper conventions: fix class naming, add thread safety, parameter validation, structured logging
-- [ ] Graceful lifecycle management: clean startup, shutdown, reconnection, and error recovery
 
 ### Out of Scope
 
@@ -82,4 +82,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-29 after initialization*
+*Last updated: 2026-03-30 after Phase 1 completion*
