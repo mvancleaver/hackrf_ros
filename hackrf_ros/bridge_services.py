@@ -87,6 +87,20 @@ def _make_setfreq_handler(node, redis_client):
     return _handler
 
 
+def _make_antenna_confirm_handler(redis_client):
+    """Return a Trigger service callback that sets the antenna confirmation key."""
+    def _handler(request, response):
+        try:
+            redis_client.set('hackrf:tx:antenna_confirmed', b'1')
+            response.success = True
+            response.message = 'Antenna confirmed - TX guard cleared'
+        except Exception as e:
+            response.success = False
+            response.message = f'Antenna confirmation failed: {e}'
+        return response
+    return _handler
+
+
 def register_bridge_services(node, redis_client):
     """Attach command subscription and Mayhem proxy services to node.
 
@@ -121,4 +135,11 @@ def register_bridge_services(node, redis_client):
         Trigger,
         '/hackrf/mayhem/radioinfo',
         _make_mayhem_handler(redis_client, 'radioinfo'),
+    )
+
+    # /hackrf/confirm_antenna -- Trigger service (TXS-02)
+    node.create_service(
+        Trigger,
+        '/hackrf/confirm_antenna',
+        _make_antenna_confirm_handler(redis_client),
     )
