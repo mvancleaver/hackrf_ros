@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-pymayhem-refactor 05-03-PLAN.md
-last_updated: "2026-03-30T09:33:03.568Z"
+stopped_at: Completed 05-pymayhem-refactor 05-04-PLAN.md
+last_updated: "2026-03-30T09:41:14.344Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 ## Current Position
 
 Phase: 05 (pymayhem-refactor) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-03-30
 
@@ -66,6 +66,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-pymayhem-refactor P01 | 6min | 2 tasks | 14 files |
 | Phase 05-pymayhem-refactor P02 | 7min | 2 tasks | 10 files |
 | Phase 05-pymayhem-refactor P03 | 5min | 2 tasks | 4 files |
+| Phase 05-pymayhem-refactor P04 | 4min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,8 @@ Recent decisions affecting current work:
 - [Phase 05-pymayhem-refactor]: D-14 implemented: xadd returns entry_id, then redis.publish('hackrf:iq:notify', entry_id) in _xadd_iq()
 - [Phase 05-pymayhem-refactor]: HackRFDriver uses threading.Event stop gate and threading.Timer reconnect — no rclpy dependency
 - [Phase 05-pymayhem-refactor]: TXController wired with primitive callables: hackrf_getter lambda, device_lock, stop_rx_fn, start_rx_fn replacing HackRFNode node reference
+- [Phase 05-pymayhem-refactor]: BridgeNode uses pubsub.get_message(timeout=0.1) polling loop to check _stop_event regularly; bridge_services.py closure factories capture node/redis at construction time
+- [Phase 05-pymayhem-refactor]: hackrf_node entry point updated to bridge_node:main; bridge has no pyhackrf2/serial imports
 
 ### Pending Todos
 
@@ -110,6 +113,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T09:33:03.564Z
-Stopped at: Completed 05-pymayhem-refactor 05-03-PLAN.md
+Last session: 2026-03-30T09:41:14.340Z
+Stopped at: Completed 05-pymayhem-refactor 05-04-PLAN.md
 Resume file: None

@@ -93,7 +93,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 2. Mayhem Serial Interface | 3/3 | Complete | 2026-03-30 |
 | 3. Redis Bridge | 2/2 | Complete | 2026-03-30 |
 | 4. TX Authorization | 2/2 | Complete | 2026-03-30 |
-| 5. PyMayhem Refactor | 2/5 | In Progress|  |
+| 5. PyMayhem Refactor | 3/5 | In Progress|  |
 
 ### Phase 5: PyMayhem Refactor
 **Goal**: Extract a standalone `pymayhem` Python package from the Mayhem serial code, refactor the HackRF driver to be Redis-native (no ROS2 dependency in core), and create a thin ROS2 bridge node that reads IQ from Redis and publishes to ROS2 topics
