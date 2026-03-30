@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+from pymayhem.exceptions import MayhemCommandError
+
 
 class RadioDomain:
     """Radio configuration domain — frequency control and radio info queries."""
@@ -32,14 +34,20 @@ class RadioDomain:
                 result[k.strip().lower()] = v.strip()
         return result
 
-    def setfreq(self, freq_hz: int) -> bool:
+    def setfreq(self, freq_hz: int) -> None:
         """Set the active app's frequency.
 
         Args:
-            freq_hz: Frequency in Hz (e.g. 433_920_000).
+            freq_hz: Frequency in Hz (e.g. 433_920_000). Must be int in [1e6, 6e9].
 
-        Returns:
-            True if command accepted, False if response contains 'error'.
+        Raises:
+            ValueError: If freq_hz is not an int or is out of the [1 MHz, 6 GHz] range.
+            MayhemCommandError: If the firmware returns an error response.
         """
+        if not isinstance(freq_hz, int) or not (1_000_000 <= freq_hz <= 6_000_000_000):
+            raise ValueError(
+                f'freq_hz must be int in [1e6, 6e9], got {freq_hz!r}'
+            )
         lines = self._send(f'setfreq {freq_hz}')
-        return not any('error' in line.lower() for line in lines)
+        if any('error' in line.lower() for line in lines):
+            raise MayhemCommandError(f'setfreq {freq_hz}: {lines}')

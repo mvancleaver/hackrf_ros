@@ -5,6 +5,8 @@ import os
 import time
 from typing import Callable
 
+from pymayhem.exceptions import MayhemCommandError
+
 
 class SystemDomain:
     """System control domain — app management, system info, reboot, RTC."""
@@ -32,20 +34,25 @@ class SystemDomain:
         lines = self._send('applist')
         return [line.split()[0] for line in lines if line.strip()]
 
-    def appstart(self, short_name: str) -> bool:
+    def appstart(self, short_name: str) -> None:
         """Start a Mayhem app by its short name.
 
         Args:
             short_name: App short name from applist (e.g. 'capture').
 
-        Returns:
-            True if command accepted, False if response contains 'error'.
+        Raises:
+            ValueError: If short_name is not a non-empty string.
+            MayhemCommandError: If the firmware returns an error response.
         """
+        if not isinstance(short_name, str) or not short_name.strip():
+            raise ValueError(
+                f'short_name must be non-empty string, got {short_name!r}'
+            )
         lines = self._send(f'appstart {short_name}')
-        ok = not any('error' in line.lower() for line in lines)
-        if ok and self._client is not None:
+        if any('error' in line.lower() for line in lines):
+            raise MayhemCommandError(f'appstart {short_name}: {lines}')
+        if self._client is not None:
             self._client._serial._active_app = short_name
-        return ok
 
     def appstart_with_reconnect(
         self,
@@ -63,9 +70,17 @@ class SystemDomain:
 
         Returns:
             True if app started and serial reconnected, False on timeout.
+
+        Raises:
+            ValueError: If short_name is not a non-empty string.
         """
+        if not isinstance(short_name, str) or not short_name.strip():
+            raise ValueError(
+                f'short_name must be non-empty string, got {short_name!r}'
+            )
         if self._client is None:
-            return self.appstart(short_name)
+            self.appstart(short_name)
+            return True
 
         serial_ref = self._client._serial
         port = serial_ref._port
@@ -119,14 +134,15 @@ class SystemDomain:
                 result[k.strip().lower()] = v.strip()
         return result
 
-    def reboot(self) -> bool:
+    def reboot(self) -> None:
         """Send reboot command.
 
-        Returns:
-            True if command sent without error in response.
+        Raises:
+            MayhemCommandError: If the firmware returns an error response.
         """
         lines = self._send('reboot')
-        return not any('error' in line.lower() for line in lines)
+        if any('error' in line.lower() for line in lines):
+            raise MayhemCommandError(f'reboot: {lines}')
 
     def rtcget(self) -> str:
         """Get the current RTC time string.
@@ -137,14 +153,20 @@ class SystemDomain:
         lines = self._send('rtcget')
         return lines[0] if lines else ''
 
-    def rtcset(self, datetime_str: str) -> bool:
+    def rtcset(self, datetime_str: str) -> None:
         """Set the RTC time.
 
         Args:
             datetime_str: Datetime string in firmware-accepted format.
 
-        Returns:
-            True if command accepted, False if response contains 'error'.
+        Raises:
+            ValueError: If datetime_str is not a non-empty string.
+            MayhemCommandError: If the firmware returns an error response.
         """
+        if not isinstance(datetime_str, str) or not datetime_str.strip():
+            raise ValueError(
+                f'datetime_str must be non-empty string, got {datetime_str!r}'
+            )
         lines = self._send(f'rtcset {datetime_str}')
-        return not any('error' in line.lower() for line in lines)
+        if any('error' in line.lower() for line in lines):
+            raise MayhemCommandError(f'rtcset {datetime_str}: {lines}')
