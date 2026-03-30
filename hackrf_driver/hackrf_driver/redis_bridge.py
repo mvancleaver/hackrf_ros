@@ -18,7 +18,8 @@ import threading
 import numpy as np
 import redis
 
-from hackrf_driver.tx_controller import TXController, TXBlockedError, TXFreqBlockedError, TXNotAuthorizedError  # noqa: F401
+from hackrf_driver.tx_controller import TXController
+from hackrf_driver.exceptions import TXBlockedError, TXFreqBlockedError, TXNotAuthorizedError  # noqa: F401
 
 
 def _handle_start_tx(driver, cmd):

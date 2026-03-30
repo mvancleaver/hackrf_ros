@@ -21,25 +21,12 @@ from typing import Any, Callable
 
 import redis
 
-
-# ---------------------------------------------------------------------------
-# Custom exceptions
-# ---------------------------------------------------------------------------
-
-class TXBlockedError(Exception):
-    """Antenna not confirmed — TX blocked until operator confirms antenna connected."""
-
-
-class TXFreqBlockedError(Exception):
-    """Frequency is on a restricted band and the frequency filter is active."""
-
-
-class TXHardBlockedError(Exception):
-    """Frequency is on an always-blocked band — NO bypass path exists."""
-
-
-class TXNotAuthorizedError(Exception):
-    """No valid one-time authorization token found in Redis."""
+from hackrf_driver.exceptions import (  # noqa: F401
+    TXBlockedError,
+    TXFreqBlockedError,
+    TXHardBlockedError,
+    TXNotAuthorizedError,
+)
 
 
 # ---------------------------------------------------------------------------
