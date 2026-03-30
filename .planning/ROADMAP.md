@@ -60,7 +60,11 @@ Plans:
   2. hackrf:state reflects current frequency, gain, sample rate, and streaming status and updates within one second of any configuration change
   3. Writing a valid command to hackrf:cmd changes the device configuration and the change is visible in hackrf:state
   4. All Redis keys use the hackrf: namespace prefix consistently; the stream is trimmed by MAXLEN and does not grow unboundedly
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — RedisBridge class with TDD, package config (RED-01, RED-04, RED-05)
+- [ ] 03-02-PLAN.md — Wire RedisBridge into HackRFNode; MayhemSerial _active_app; state/command integration (RED-02, RED-03, RED-04, RED-05)
 
 ### Phase 4: TX Authorization
 **Goal**: The driver can transmit signals via pyhackrf2, gated behind one-token-per-TX authorization, a frequency allowlist, and an explicit antenna confirmation
@@ -82,5 +86,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. RX Pipeline Correctness | 0/3 | In progress | - |
 | 2. Mayhem Serial Interface | 0/3 | Not started | - |
-| 3. Redis Bridge | 0/? | Not started | - |
+| 3. Redis Bridge | 0/2 | Not started | - |
 | 4. TX Authorization | 0/? | Not started | - |
