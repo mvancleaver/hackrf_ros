@@ -11,7 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools', 'pyserial>=3.5'],
+    install_requires=['setuptools', 'pyserial>=3.5', 'redis>=7.4.0', 'hiredis>=3.3.1'],
     zip_safe=True,
     maintainer='root',
     maintainer_email='root@localhost',
