@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 6 context gathered
-last_updated: "2026-03-30T21:25:20.316Z"
-last_activity: 2026-03-30 — v2.0 roadmap created (Phases 6-8, 27 requirements)
+status: executing
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-30T22:07:41.935Z"
+last_activity: 2026-03-30
 progress:
   total_phases: 8
   completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 19
+  completed_plans: 16
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-30)
 
 **Core value:** Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX operations gated behind explicit authorization.
-**Current focus:** Milestone v2.0 — Phase 6: Foundation Hardening (not started)
+**Current focus:** Phase 06 — foundation-hardening
 
 ## Current Position
 
-Phase: 6 — Foundation Hardening
-Plan: —
-Status: Roadmap created, ready for planning
-Last activity: 2026-03-30 — v2.0 roadmap created (Phases 6-8, 27 requirements)
+Phase: 06 (foundation-hardening) — EXECUTING
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-03-30
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -68,6 +68,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-pymayhem-refactor P03 | 5min | 2 tasks | 4 files |
 | Phase 05-pymayhem-refactor P04 | 4min | 3 tasks | 4 files |
 | Phase 05-pymayhem-refactor P05 | 25min | 1 tasks | 6 files |
+| Phase 06-foundation-hardening P01 | 3min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,8 @@ Recent decisions affecting current work:
 - [Phase 05-pymayhem-refactor]: hackrf_node entry point updated to bridge_node:main; bridge has no pyhackrf2/serial imports
 - [Phase 05-pymayhem-refactor]: setUpModule/tearDownModule pattern for sys.modules isolation in test_hackrf_node_redis.py
 - [Phase 05-pymayhem-refactor]: pymayhem/tests/__init__.py removed to fix pytest collection from workspace root
+- [Phase 06-foundation-hardening]: TX exceptions reparented under HackRFError via new exceptions.py; re-exported from tx_controller for backward compatibility
+- [Phase 06-foundation-hardening]: pymayhem domain bool returns converted to raise MayhemCommandError; appstart_with_reconnect keeps bool return (reconnect timeout, not command error)
 
 ### Pending Todos
 
@@ -118,6 +121,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-30T21:25:20.313Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-foundation-hardening/06-CONTEXT.md
+Last session: 2026-03-30T22:07:41.931Z
+Stopped at: Completed 06-01-PLAN.md
+Resume file: None

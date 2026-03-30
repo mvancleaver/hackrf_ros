@@ -60,9 +60,9 @@ Requirements for v2.0: Hardening, Observability & Signal Capabilities.
 
 ### Error Handling & Validation
 
-- [ ] **ERR-01**: pymayhem raises typed exceptions (MayhemError hierarchy) instead of returning bool on command failures
-- [ ] **ERR-02**: hackrf_driver raises typed exceptions (HackRFError hierarchy) for config, device, and TX errors
-- [ ] **ERR-03**: All public pymayhem methods validate input parameters and raise ValueError on out-of-range values
+- [x] **ERR-01**: pymayhem raises typed exceptions (MayhemError hierarchy) instead of returning bool on command failures
+- [x] **ERR-02**: hackrf_driver raises typed exceptions (HackRFError hierarchy) for config, device, and TX errors
+- [x] **ERR-03**: All public pymayhem methods validate input parameters and raise ValueError on out-of-range values
 - [ ] **ERR-04**: All hackrf_driver config changes validate against PARAM_RANGES before touching hardware
 - [ ] **ERR-05**: Exception dispatch boundary in redis_bridge catches pymayhem/hackrf exceptions and maps to structured Redis error state
 
@@ -182,9 +182,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REF-05 | Phase 5 | Complete |
 | REF-06 | Phase 5 | Complete |
 | REF-07 | Phase 5 | Complete |
-| ERR-01 | Phase 6 | Pending |
-| ERR-02 | Phase 6 | Pending |
-| ERR-03 | Phase 6 | Pending |
+| ERR-01 | Phase 6 | Complete |
+| ERR-02 | Phase 6 | Complete |
+| ERR-03 | Phase 6 | Complete |
 | ERR-04 | Phase 6 | Pending |
 | ERR-05 | Phase 6 | Pending |
 | REL-02 | Phase 6 | Pending |
