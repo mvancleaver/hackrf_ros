@@ -80,9 +80,9 @@ Requirements for v2.0: Hardening, Observability & Signal Capabilities.
 
 ### TX Safety
 
-- [ ] **TXS-01**: validate_tx() checks all four TX guards (antenna, hard-block, freq filter, auth existence) without consuming the auth token
+- [x] **TXS-01**: validate_tx() checks all four TX guards (antenna, hard-block, freq filter, auth existence) without consuming the auth token
 - [ ] **TXS-02**: BridgeNode exposes /hackrf/confirm_antenna ROS2 service that sets the Redis antenna confirmation key
-- [ ] **TXS-03**: TXController periodically re-reads antenna confirmation key (not just at init)
+- [x] **TXS-03**: TXController periodically re-reads antenna confirmation key (not just at init)
 
 ### IQ Recording
 
@@ -189,9 +189,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ERR-05 | Phase 6 | Pending |
 | REL-02 | Phase 6 | Pending |
 | REL-03 | Phase 6 | Pending |
-| TXS-01 | Phase 6 | Pending |
+| TXS-01 | Phase 6 | Complete |
 | TXS-02 | Phase 6 | Pending |
-| TXS-03 | Phase 6 | Pending |
+| TXS-03 | Phase 6 | Complete |
 | LEG-01 | Phase 6 | Pending |
 | REL-01 | Phase 7 | Pending |
 | OBS-01 | Phase 7 | Pending |

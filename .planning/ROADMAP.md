@@ -122,7 +122,7 @@ Plans:
 - [x] 06-01-PLAN.md — Exception hierarchies for pymayhem and hackrf_driver; domain method conversion to raise-on-error (ERR-01, ERR-02, ERR-03)
 - [ ] 06-02-PLAN.md — _update_param raises HackRFConfigError; _dispatch_command exception boundary; IQ sequence numbers (ERR-04, ERR-05, REL-03)
 - [ ] 06-03-PLAN.md — BridgeNode reconnect loop; antenna confirmation service; legacy deprecation (REL-02, TXS-02, LEG-01)
-- [ ] 06-04-PLAN.md — validate_tx() dry-run method; periodic antenna re-read timer (TXS-01, TXS-03)
+- [x] 06-04-PLAN.md — validate_tx() dry-run method; periodic antenna re-read timer (TXS-01, TXS-03)
 
 ### Phase 7: Observability & Reliability
 **Goal**: Operators can observe live driver health through Redis metrics, failed commands are preserved for forensic review, and the driver self-heals from USB stalls without manual intervention
