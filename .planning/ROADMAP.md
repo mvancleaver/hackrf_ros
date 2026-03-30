@@ -93,7 +93,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 2. Mayhem Serial Interface | 3/3 | Complete | 2026-03-30 |
 | 3. Redis Bridge | 2/2 | Complete | 2026-03-30 |
 | 4. TX Authorization | 2/2 | Complete | 2026-03-30 |
-| 5. PyMayhem Refactor | 0/? | Not started | - |
+| 5. PyMayhem Refactor | 0/5 | Not started | - |
 
 ### Phase 5: PyMayhem Refactor
 **Goal**: Extract a standalone `pymayhem` Python package from the Mayhem serial code, refactor the HackRF driver to be Redis-native (no ROS2 dependency in core), and create a thin ROS2 bridge node that reads IQ from Redis and publishes to ROS2 topics
@@ -104,4 +104,11 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
   2. The HackRF driver runs standalone with Redis as its only external interface — no rclpy import in the core driver process
   3. A separate ROS2 bridge node reads IQ from `hackrf:iq:stream` Redis Stream and publishes to `/hackrf/iq` — existing ROS2 subscribers work unchanged
   4. All 68 existing unit tests pass after the refactor (no regression)
-**Plans**: TBD
+**Plans**: 5 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Extract pymayhem package: _serial.py, domain modules, MayhemClient, UnsafeMayhemClient, pyproject.toml, 12 tests (REF-01, REF-02, REF-03)
+- [ ] 05-02-PLAN.md — hackrf_driver scaffold: config.py, move RedisBridge + TXController, decouple TXController from node ref, 36 tests (REF-04, REF-07)
+- [ ] 05-03-PLAN.md — HackRFDriver main loop: driver.py, cli.py, __main__.py, threading replaces ROS2 timers (REF-04)
+- [ ] 05-04-PLAN.md — ROS2 bridge node: bridge_node.py reads Redis Pub/Sub, publishes /hackrf/iq and /hackrf/state (REF-05, REF-06)
+- [ ] 05-05-PLAN.md — Test migration: update test/ imports to new package homes, full 68-test regression check (REF-07)
