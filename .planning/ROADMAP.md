@@ -44,7 +44,12 @@ Plans:
   2. A ROS2 service call switches the active Mayhem app by name (e.g., capture -> scanner)
   3. A setfreq command updates the frequency within the active app and radioinfo confirms the change
   4. The mode-conflict behavior between pyhackrf2 IQ streaming and Mayhem serial is tested and documented, with the driver failing loudly if the combination is incompatible
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Create hackrf_ros_interfaces CMake package with AppStart.srv and SetFreq.srv (MAY-03, MAY-04)
+- [ ] 02-02-PLAN.md — Implement MayhemSerial helper class with serial lifecycle, command methods, and unit tests (MAY-01, MAY-02, MAY-03, MAY-04, MAY-05)
+- [ ] 02-03-PLAN.md — Wire MayhemSerial into HackRFNode: services, status topic, mode coexistence check (MAY-01, MAY-03, MAY-04, MAY-05, MAY-06)
 
 ### Phase 3: Redis Bridge
 **Goal**: IQ samples and device state are published to Redis continuously, and external callers can reconfigure the device via Redis commands
@@ -76,6 +81,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. RX Pipeline Correctness | 0/3 | In progress | - |
-| 2. Mayhem Serial Interface | 0/? | Not started | - |
+| 2. Mayhem Serial Interface | 0/3 | Not started | - |
 | 3. Redis Bridge | 0/? | Not started | - |
 | 4. TX Authorization | 0/? | Not started | - |
