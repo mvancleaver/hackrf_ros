@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
+"""HackRFNode -- DEPRECATED.
+
+This module is retained for colcon build compatibility only.
+Use hackrf_driver.HackRFDriver + hackrf_ros.BridgeNode instead.
+
+See: hackrf_driver/hackrf_driver/driver.py
+     hackrf_ros/bridge_node.py
+"""
 
 import json
+import warnings
 import rclpy
 import rclpy.parameter
 from rclpy.node import Node
@@ -20,6 +29,14 @@ import numpy as np
 import time
 import queue
 import threading
+
+warnings.warn(
+    'hackrf_ros.hackrf_node is deprecated. '
+    'Use hackrf_driver.HackRFDriver + hackrf_ros.BridgeNode. '
+    'This module will be removed in v3.0.',
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 CHUNK_IQ_PAIRS = 2048  # D-04: fixed chunk size
 _MIN_RECONNECT_DELAY = 1.0   # D-06: exponential backoff start
