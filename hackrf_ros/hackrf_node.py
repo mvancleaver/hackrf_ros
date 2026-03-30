@@ -2,6 +2,7 @@
 
 import json
 import rclpy
+import rclpy.parameter
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rcl_interfaces.msg import SetParametersResult
@@ -11,6 +12,7 @@ from rcl_interfaces.msg import ParameterDescriptor  # For parameter descriptions
 from std_srvs.srv import Trigger
 from hackrf_ros_interfaces.srv import AppStart, SetFreq
 from hackrf_ros.mayhem_serial import MayhemSerial
+from hackrf_ros.redis_bridge import RedisBridge
 
 import pyhackrf2  # The Python binding for libhackrf
 import numpy as np
@@ -57,6 +59,7 @@ class HackRFNode(Node):
         self._serial_reconnect_delay = _MIN_RECONNECT_DELAY
         self._serial_reconnect_timer = None
         self._serial_connected = False
+        self._start_time = time.monotonic()  # for uptime_s in state dict (D-08)
 
         # --- 1. Declare ROS 2 Parameters for HackRF Configuration ---
         # Center Frequency (Hz)
@@ -120,6 +123,17 @@ class HackRFNode(Node):
         _cmd_timeout = self.get_parameter('serial_command_timeout').get_parameter_value().double_value
         self._mayhem = MayhemSerial(_serial_port, self.get_logger(), timeout=_cmd_timeout)
         self._try_serial_connect()
+
+        # --- Phase 3: RedisBridge (D-10, D-11) ---
+        self.declare_parameter(
+            'redis_stream_maxlen', 10000,
+            ParameterDescriptor(description='Redis Stream MAXLEN for hackrf:iq:stream (D-04)')
+        )
+        _maxlen = self.get_parameter('redis_stream_maxlen').get_parameter_value().integer_value
+        self._redis_bridge = RedisBridge(
+            self._redis_queue, self, self.get_logger(), maxlen=_maxlen
+        )
+        self._redis_bridge.open()   # D-02: returns False if Redis unreachable — node continues
 
         # --- 3. Create ROS 2 Publisher ---
         qos_profile = QoSProfile(
@@ -276,6 +290,8 @@ class HackRFNode(Node):
             response.success = False
             response.message = f"appstart error: {e}"
             self.get_logger().error(f"_handle_appstart unexpected error: {e}")
+        if response.success and hasattr(self, '_redis_bridge'):
+            self._redis_bridge.publish_state(self._build_state_dict())
         return response
 
     def _handle_setfreq(self, request, response):
@@ -331,6 +347,77 @@ class HackRFNode(Node):
             self.get_logger().error(f"_handle_radioinfo unexpected error: {e}")
         return response
 
+    def _build_state_dict(self) -> dict:
+        """Build hackrf:state mapping from current node state. (RED-02 / D-08, D-09)"""
+        return {
+            'center_frequency': self._last_params['center_frequency'],
+            'sample_rate':      self._last_params['sample_rate'],
+            'lna_gain':         self._last_params['lna_gain'],
+            'vga_gain':         self._last_params['vga_gain'],
+            'amp_enabled':      self._last_params['amp_enabled'],
+            'is_streaming':     self.is_hackrf_streaming,
+            'connected':        self._hackrf is not None,
+            'uptime_s':         time.monotonic() - self._start_time,
+            'active_app':       getattr(self._mayhem, '_active_app', ''),
+            'discovered_apps':  json.dumps(getattr(self._mayhem, '_known_apps', [])),
+            'serial_connected': self._serial_connected,
+        }
+
+    def _set_center_frequency(self, freq_hz: float) -> None:
+        """Set center_frequency via ROS2 parameter system (RED-03 / D-06)."""
+        self.set_parameters([rclpy.parameter.Parameter(
+            'center_frequency', rclpy.parameter.Parameter.Type.DOUBLE, float(freq_hz)
+        )])
+
+    def _set_sample_rate(self, sample_rate: float) -> None:
+        """Set sample_rate via ROS2 parameter system (RED-03 / D-06)."""
+        self.set_parameters([rclpy.parameter.Parameter(
+            'sample_rate', rclpy.parameter.Parameter.Type.DOUBLE, float(sample_rate)
+        )])
+
+    def _set_lna_gain(self, lna_gain: int) -> None:
+        """Set lna_gain via ROS2 parameter system (RED-03 / D-06)."""
+        self.set_parameters([rclpy.parameter.Parameter(
+            'lna_gain', rclpy.parameter.Parameter.Type.INTEGER, int(lna_gain)
+        )])
+
+    def _set_vga_gain(self, vga_gain: int) -> None:
+        """Set vga_gain via ROS2 parameter system (RED-03 / D-06)."""
+        self.set_parameters([rclpy.parameter.Parameter(
+            'vga_gain', rclpy.parameter.Parameter.Type.INTEGER, int(vga_gain)
+        )])
+
+    def _set_amp_enabled(self, enabled: bool) -> None:
+        """Set amp_enabled via ROS2 parameter system (RED-03 / D-06)."""
+        self.set_parameters([rclpy.parameter.Parameter(
+            'amp_enabled', rclpy.parameter.Parameter.Type.BOOL, bool(enabled)
+        )])
+
+    def _start_rx_if_stopped(self) -> None:
+        """Start RX streaming if not already running (RED-03 / D-06 start_rx command)."""
+        if not self.is_hackrf_streaming and self._hackrf:
+            with self._device_lock:
+                try:
+                    self._hackrf.start_rx(self._rx_callback)
+                    self.is_hackrf_streaming = True
+                    self.get_logger().info("RX started via Redis command.")
+                except Exception as e:
+                    self.get_logger().error(f"_start_rx_if_stopped failed: {e}")
+
+    def _stop_rx_if_running(self) -> None:
+        """Stop RX streaming if currently running (RED-03 / D-06 stop_rx command)."""
+        if self.is_hackrf_streaming and self._hackrf:
+            with self._device_lock:
+                self._stop_event.set()
+                try:
+                    self._hackrf.stop_rx()
+                    self.is_hackrf_streaming = False
+                    self.get_logger().info("RX stopped via Redis command.")
+                except Exception as e:
+                    self.get_logger().error(f"_stop_rx_if_running failed: {e}")
+                finally:
+                    self._stop_event.clear()
+
     def _publish_mayhem_status(self) -> None:
         """Timer callback: publish Mayhem state to /hackrf/mayhem_status every 5s (D-08, D-09)."""
         status = {
@@ -382,6 +469,8 @@ class HackRFNode(Node):
             results.append(SetParametersResult(successful=True, reason=''))
         if needs_reconfig and self._hackrf:
             self._configure_device()
+        if hasattr(self, '_redis_bridge'):
+            self._redis_bridge.publish_state(self._build_state_dict())
         return results
 
     def _configure_device(self) -> None:
@@ -465,6 +554,10 @@ class HackRFNode(Node):
     def destroy_node(self) -> None:
         """Stop streaming, close device, cancel timers. (RX-06)"""
         self.get_logger().info("HackRFNode shutting down...")
+        # Close RedisBridge FIRST — before serial or pyhackrf2 (D-11 / CONTEXT.md)
+        if hasattr(self, '_redis_bridge'):
+            self._redis_bridge.close()
+            self.get_logger().info("RedisBridge closed.")
         # Close serial before pyhackrf2 (CONTEXT.md integration point)
         if self._serial_reconnect_timer:
             self._serial_reconnect_timer.cancel()
