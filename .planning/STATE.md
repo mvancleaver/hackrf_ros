@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 1 context gathered
-last_updated: "2026-03-30T03:17:31.287Z"
-last_activity: 2026-03-29 — Roadmap created
+status: executing
+stopped_at: Completed 01-rx-pipeline-correctness-01-PLAN.md
+last_updated: "2026-03-30T03:53:23.552Z"
+last_activity: 2026-03-30
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 3
+  completed_plans: 1
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-29)
 
 **Core value:** Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX operations gated behind explicit authorization.
-**Current focus:** Phase 1 — RX Pipeline Correctness
+**Current focus:** Phase 01 — rx-pipeline-correctness
 
 ## Current Position
 
-Phase: 1 of 4 (RX Pipeline Correctness)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-03-29 — Roadmap created
+Phase: 01 (rx-pipeline-correctness) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-03-30
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -52,6 +52,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 01-rx-pipeline-correctness P01 | 2min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -60,7 +61,8 @@ Progress: [░░░░░░░░░░] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- None yet (pre-execution)
+- (pre-execution)
+- [Phase 01-rx-pipeline-correctness]: Dual queue.Queue(maxsize=64) replace shared numpy buffer; drop-oldest overflow; bool return from _rx_callback; topic renamed to /hackrf/iq; CHUNK_IQ_PAIRS=2048 constant (Plan 01-01)
 
 ### Pending Todos
 
@@ -73,6 +75,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T03:17:31.284Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-rx-pipeline-correctness/01-CONTEXT.md
+Last session: 2026-03-30T03:53:23.549Z
+Stopped at: Completed 01-rx-pipeline-correctness-01-PLAN.md
+Resume file: None

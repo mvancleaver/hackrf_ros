@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Replace buffer with dual queues, strip RX callback, fix publish consumer (RX-01, RX-07)
+- [x] 01-01-PLAN.md — Replace buffer with dual queues, strip RX callback, fix publish consumer (RX-01, RX-07)
 - [ ] 01-02-PLAN.md — Reconnect loop with exponential backoff, deadlock guard, lifecycle shutdown (RX-02, RX-05, RX-06)
 - [ ] 01-03-PLAN.md — Parameter validation, class rename, logging cleanup, plotter/config/setup alignment (RX-03, RX-04)
 
