@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 - [x] 01-01-PLAN.md — Replace buffer with dual queues, strip RX callback, fix publish consumer (RX-01, RX-07)
 - [x] 01-02-PLAN.md — Reconnect loop with exponential backoff, deadlock guard, lifecycle shutdown (RX-02, RX-05, RX-06)
-- [ ] 01-03-PLAN.md — Parameter validation, class rename, logging cleanup, plotter/config/setup alignment (RX-03, RX-04)
+- [x] 01-03-PLAN.md — Parameter validation, class rename, logging cleanup, plotter/config/setup alignment (RX-03, RX-04)
 
 ### Phase 2: Mayhem Serial Interface
 **Goal**: The driver communicates with Mayhem firmware over serial, can discover and switch apps, update frequency, and confirm the mode-conflict answer empirically
