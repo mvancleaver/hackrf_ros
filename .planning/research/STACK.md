@@ -1,142 +1,286 @@
 # Technology Stack
 
-**Project:** HackRF ROS2 Driver — Milestone: Redis + Serial + TX
-**Researched:** 2026-03-29
-**Scope:** Additions only — Redis integration, serial Mayhem control, TX guardrails. Does not re-cover ROS2/pyhackrf2 baseline from `.planning/codebase/STACK.md`.
+**Project:** HackRF ROS2 Driver — Milestone: v2.0 Hardening, Observability & Signal Capabilities
+**Researched:** 2026-03-30
+**Scope:** New additions only for v2.0. Does not re-cover the validated v1.x stack (redis-py, hiredis, pyserial, pyhackrf2, numpy, rclpy).
+**Confidence:** HIGH (PyPI verified), MEDIUM (design patterns from stdlib/community)
 
 ---
 
-## New Dependencies
+## Previously Validated Stack (Do Not Re-Research)
 
-### Redis Client
-
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| redis-py | `>=7.4.0` | Redis client — IQ streaming, device state, command interface | Latest stable (released 2026-03-24). v7.x is the current active major series; v5/v6 are maintenance-only. Requires Python >=3.10, which is satisfied by ROS2 Humble's Python 3.10. |
-| hiredis | `>=3.3.1` | C-accelerated response parser for redis-py | Latest stable (released 2026-03-16). Zero code changes required — redis-py auto-detects and uses it when installed. Provides measurable throughput improvement for high-frequency XADD calls from the IQ callback. |
-
-**Confidence: HIGH** — Versions verified directly from PyPI (pypi.org/project/redis/, pypi.org/project/hiredis/).
-
-**Why NOT redis-py <7:** The v5 and v6 branches are in maintenance mode. v7 introduced OpenTelemetry metrics support and has active bug fixes. Given no requirement to support Python 3.8/3.9, pinning to v7 is correct.
-
-**Why NOT aioredis:** aioredis was merged into redis-py itself in v4.2. Do not install it as a separate package — it is abandoned.
-
-**Why NOT walrus / pottery:** Higher-level Redis abstractions add indirection without benefit for a driver that needs explicit XADD/XREAD/SET control. Use redis-py directly.
+| Package | Version | Role |
+|---------|---------|------|
+| redis-py | >=7.4.0 | IQ streaming, state hash, command dispatch |
+| hiredis | >=3.3.1 | C-accelerated redis-py parser |
+| pyserial | >=3.5 | Mayhem serial CDC-ACM |
+| pyhackrf2 | latest | IQ USB bulk transfer via libhackrf |
+| numpy | pinned by scipy below | IQ conversion, signal math |
+| rclpy / std_msgs / std_srvs | ROS2 Humble | BridgeNode messaging |
+| pytest | >=7.x | 135-test suite |
 
 ---
 
-### Serial Communication
+## New Dependencies for v2.0
 
-| Technology | Version | Purpose | Why |
-|------------|---------|---------|-----|
-| pyserial | `>=3.5` | Serial communication with Mayhem firmware over /dev/ttyACM1 | Latest stable release. Mature, no active development needed — v3.5 has been stable since 2020 with no functional gaps for ACM device use. Ships with the Docker base image in most configurations. |
+### IQ Recording — SigMF
 
-**Confidence: HIGH** — Version verified from pypi.org/project/pyserial/ and GitHub releases. No v3.6 exists as of 2026-03-29; v3.5 is the current and final stable release.
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| sigmf | `>=1.7.2` | Write SigMF-format IQ recordings (.sigmf-data + .sigmf-meta) | The canonical Python SigMF implementation from the spec authors. v1.7.2 released 2026-03-20 — current stable. Depends only on numpy (already present) and jsonschema. LGPL v3 license, Python 3.7–3.14 compatible. No other Python library writes standards-compliant SigMF without custom JSON construction. |
+| jsonschema | `>=4.0` | Transitive dep of sigmf — SigMF metadata validation | Pulled in automatically by sigmf. No explicit pin needed unless jsonschema conflicts arise with other ROS2 tools. |
 
-**Why NOT pyserial-asyncio:** The ROS2 node uses a dedicated reader thread (not asyncio event loop). pyserial-asyncio introduces asyncio dependency for no benefit in a threaded architecture. Stick with synchronous `serial.Serial` plus a daemon thread.
+**Confidence: HIGH** — Version verified from PyPI (pypi.org/project/SigMF/) and GitHub releases (sigmf/sigmf-python). Dependencies confirmed from pyproject.toml inspection.
 
-**Why NOT serial (legacy package):** `serial` on PyPI is the old package name — it redirects to pyserial but is not the canonical install target. Always use `pip install pyserial`.
+**Why NOT raw numpy.tofile():** Writing raw .cf32 or .cs8 files loses all metadata (center frequency, sample rate, hardware info, capture time). SigMF pairs the binary data file with a JSON metadata file, enabling any SigMF-aware tool (GNU Radio, SigMF Inspector, IQEngine) to open recordings without a README.
 
----
+**Why NOT GNURadio sigmf blocks:** GNURadio is not in the stack and has a multi-hundred-MB install footprint. The standalone `sigmf` pip package is sufficient.
 
-## Mayhem Firmware Serial Protocol
+**SigMF API surface used:**
+```python
+import sigmf
+from sigmf import SigMFFile
 
-**Confidence: MEDIUM** — Verified from the official Mayhem firmware GitHub wiki (portapack-mayhem/mayhem-firmware/wiki/USB-Serial-Console). TX-specific commands are not documented beyond POCSAG; other TX modes are controlled via `appstart` + `setfreq`.
-
-### Connection Parameters
-
-- **Device path:** `/dev/ttyACM1` (per PROJECT.md; ACM interfaces are USB CDC virtual serial — baud rate setting is ignored by the OS driver, data always transfers at USB speed)
-- **Recommended baud rate in pyserial:** `115200` (conventional; has no effect on USB CDC but some tools require a non-zero value)
-- **Line ending:** `\r\n` (ChibiOS/RT console convention)
-- **Read timeout:** `1.0` second (prevents indefinite block on unresponsive device)
-
-### Confirmed Serial Commands
-
-| Command | Syntax | Purpose |
-|---------|--------|---------|
-| `help` | `help` | List all available commands |
-| `applist` | `applist` | List apps startable via `appstart` (returns: short_name, full_name, category per line) |
-| `appstart` | `appstart <short_name>` | Launch named app, stops any currently running app |
-| `setfreq` | `setfreq <Hz>` | Set radio frequency in Hz for apps that support it (Capture, APRS, Pocsag, etc.) |
-| `radioinfo` | `radioinfo` | Read back current frequency, bandwidth, sample rate, modulation |
-| `sendpocsag` | `sendpocsag <addr> <msglen> [baud] [type] [function] [phase]` | Initiate POCSAG TX |
-| `reboot` | `reboot` | Reboot PortaPack |
-| `screenshot` | `screenshot` | Capture screen to SD card |
-| `button` | `button <1-8>` | Simulate hardware button press |
-
-**Important limitation:** There is no generic `settx` or `transmit` command in the Mayhem serial protocol. TX is initiated by starting the appropriate app (e.g., replay, POCSAG, SSTV) via `appstart`, then optionally setting frequency via `setfreq`. The driver must model TX as: authorize → appstart TX_app → setfreq → (TX runs) → appstart some_RX_app or reboot to stop.
-
----
-
-## Redis Interface Design
-
-### Data Structures
-
-| Key Pattern | Redis Type | Content | Notes |
-|-------------|------------|---------|-------|
-| `hackrf:iq` | Stream (XADD) | `{samples: <bytes>}` | Binary IQ chunks, trimmed with MAXLEN ~= 100 entries |
-| `hackrf:state` | Hash (HSET) | `{freq_hz, sample_rate, gain_db, streaming, app}` | Updated on every parameter change |
-| `hackrf:cmd` | Stream (XREAD block) | `{cmd: "set_freq", value: "433920000"}` | Driver reads with blocking XREAD, consumer group optional |
-| `hackrf:tx:auth` | String (SET EX) | `"1"` | TX authorization token; expires after N seconds (hard interlock) |
-
-**Why Streams for IQ (not Pub/Sub):**
-Pub/Sub drops messages if the subscriber is slow or disconnected — unacceptable for an IQ buffer where late consumers must be able to catch up. Streams with MAXLEN trimming provide a ring-buffer semantic: consumers can read at their own pace within a bounded window. Latency overhead vs Pub/Sub is ~1-2 ms, acceptable for SDR data that isn't sub-millisecond-sensitive.
-
-**Why Streams for commands (not lists/Pub/Sub):**
-XREAD BLOCK gives blocking wait with consumer group support if needed later. Consumer groups allow the driver to acknowledge processed commands, preventing duplicate execution on restart.
-
-**Why Hash for state (not string/JSON):**
-HSET allows atomic partial updates (update frequency without clobbering gain). Consumers can HGETALL or subscribe to keyspace notifications on targeted fields.
-
----
-
-## TX Authorization Guardrail Design
-
-**Confidence: MEDIUM** — No established open-source SDR TX authorization library exists. The pattern below is derived from safety-critical software interlock principles (hardware E-stop analogs), adapted for this use case. Verified as the correct implementation approach.
-
-### Pattern: Time-bounded Authorization Token
-
-TX must not proceed without a Redis key `hackrf:tx:auth` that is:
-
-1. Set explicitly by the external operator (`SET hackrf:tx:auth 1 EX 30`)
-2. Checked atomically before every TX operation
-3. Deleted immediately after TX begins (one-shot, not persistent)
-
-```
-External operator:  SET hackrf:tx:auth 1 EX 30   # authorize for 30s window
-Driver (on TX cmd):
-    token = r.getdel("hackrf:tx:auth")            # atomic read+delete
-    if not token:
-        raise TXNotAuthorized
-    # proceed with appstart TX_app
+meta = SigMFFile(
+    global_info={
+        SigMFFile.SAMPLE_RATE_KEY: 10_000_000,     # 10 MSPS
+        SigMFFile.HW_KEY: "HackRF One + PortaPack",
+        SigMFFile.DATATYPE_KEY: "cf32_le",          # complex float32 little-endian
+    },
+    data_file="recording.sigmf-data"
+)
+meta.add_capture(0, metadata={SigMFFile.FREQUENCY_KEY: 433_920_000})
+meta.tofile("recording.sigmf-meta")
+# IQ samples written separately: np.array(iq, dtype=np.complex64).tofile("recording.sigmf-data")
 ```
 
-**Why `getdel` (atomic read+delete):**
-Prevents two concurrent TX commands both seeing a valid token. `GETDEL` is a single atomic Redis operation (available since Redis 6.2, included in all target Redis versions).
+---
 
-**Why TTL on the token:**
-An operator who sets auth and walks away cannot leave a permanently armed transmitter. The TTL forces re-authorization on any TX attempt after the window expires.
+### Spectral Analysis — FFT / Waterfall
 
-**Why NOT a ROS2 service call for auth:**
-The authorization lives in Redis so external consumers (non-ROS processes) can participate in the safety model. ROS2-only auth would exclude Redis-native consumers from the safety gate.
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| scipy | `>=1.11,<2.0` | `scipy.signal.welch`, `scipy.signal.spectrogram`, windowing functions | Provides higher-quality FFT routines than numpy.fft alone (Welch PSD, configurable windowing, spectrogram stacking). numpy.fft works for single-shot FFT but scipy.signal.spectrogram gives the time-frequency 2D array needed for waterfall data. v1.17.1 is current (Feb 2026) but requires Python >=3.11 — see compatibility note. |
 
-**Secondary guardrail:** The driver maintains a Python-side `_tx_authorized: bool = False` flag that is set only when `getdel` returns a valid token and cleared at TX completion. This prevents any re-entrant TX path from bypassing the Redis check.
+**Compatibility note:** scipy 1.17.x requires Python >=3.11 and numpy >=1.26.4. ROS2 Humble ships Python 3.10. This is a constraint.
+
+**Resolution:** Use `scipy>=1.11,<1.16` (1.15.x is the last series supporting Python 3.10) OR use `numpy.fft` directly with manual windowing. Given that the Docker container can control its Python environment independently of the ROS2 system Python, and hackrf_driver runs without rclpy, installing scipy 1.15.x in the driver venv is safe.
+
+**Fallback (no scipy):** numpy.fft is stdlib-compatible and sufficient for single-shot PSD:
+```python
+# numpy-only waterfall bin
+fft_out = np.fft.fftshift(np.fft.fft(samples * np.hanning(len(samples))))
+psd_db = 20 * np.log10(np.abs(fft_out) + 1e-12)
+```
+For the initial implementation, use numpy.fft with a Hann window. Add scipy only if Welch averaging or scipy.signal.spectrogram is specifically required.
+
+**Recommendation:** Start with numpy.fft + manual windowing in hackrf_driver. Add `scipy>=1.11,<1.16` as an optional extra (`pip install hackrf_driver[spectral]`) to avoid forcing a numpy version pin on consumers.
+
+**Confidence: HIGH** — scipy version matrix confirmed from scipy.org/news and pypi.org/project/scipy/.
+
+**Why NOT matplotlib for headless spectrum:** matplotlib is for display — it has no business in hackrf_driver which is a headless data producer. Spectrum data goes to Redis as a JSON-encoded array; visualization is a consumer concern.
+
+---
+
+### pymayhem Async API — asyncio Serial
+
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| pyserial-asyncio-fast | `>=0.16` | asyncio Transport/Protocol/StreamReader over pyserial | Drop-in asyncio layer for pyserial. v0.16 released 2025-03-27, requires Python >=3.9 (satisfied). Implements "eager writes" that reduce overhead vs the original pyserial-asyncio. Maintained by Home Assistant core team — high confidence in ongoing support. Provides `open_serial_connection()` returning asyncio.StreamReader/StreamWriter — the exact interface needed for an async pymayhem API. |
+
+**Confidence: HIGH** — Version verified from PyPI (pypi.org/project/pyserial-asyncio-fast/).
+
+**Why pyserial-asyncio-fast over pyserial-asyncio:** pyserial-asyncio (v0.6, last release 2022) is unmaintained. pyserial-asyncio-fast is the actively maintained fork used in Home Assistant (a large production codebase). Eager-write optimization matters for low-latency command dispatch.
+
+**Why NOT aioserial:** aioserial (PyPI) wraps pyserial with threading under the hood rather than native asyncio Transport. pyserial-asyncio-fast uses a proper asyncio selector-based Transport.
+
+**Why NOT trio or anyio:** pymayhem has no dependency on a specific async framework. asyncio is stdlib, zero new deps for consumers who use asyncio. Trio/anyio would add mandatory transitive deps.
+
+**Integration pattern for pymayhem:**
+```python
+# pymayhem/mayhem_async.py
+import asyncio
+import serial_asyncio_fast  # package name differs from install name
+
+class AsyncMayhemSerial:
+    async def connect(self, port: str, baudrate: int = 115200):
+        self._reader, self._writer = await serial_asyncio_fast.open_serial_connection(
+            url=port, baudrate=baudrate
+        )
+
+    async def send_command(self, cmd: str) -> str:
+        self._writer.write((cmd + "\r\n").encode())
+        line = await asyncio.wait_for(self._reader.readline(), timeout=2.0)
+        return line.decode().strip()
+```
+
+**pymayhem setup.cfg addition:**
+```ini
+[options.extras_require]
+async =
+    pyserial-asyncio-fast>=0.16
+```
+
+Keeping async as an optional extra means the base pymayhem package stays pyserial-only (no asyncio transport dep for users who only need synchronous operation).
+
+---
+
+### Observability Metrics
+
+**Decision: No new package needed.**
+
+Publish metrics directly to Redis using existing redis-py. A dedicated metrics library (prometheus_client, statsd, etc.) would require a separate scrape endpoint, Prometheus infrastructure, or a statsd server — none of which are in the deployment target.
+
+**Pattern:** Write counters/gauges to a Redis hash on a 1-second timer:
+```
+HSET hackrf:metrics iq_frames_total 12345 tx_count 3 rx_errors 0 watchdog_restarts 1
+```
+
+External consumers (Grafana via redis-datasource, custom dashboards) can read this hash. A `hackrf:metrics` keyspace notification can trigger alerting.
+
+**Why NOT prometheus_client:** Adds a background HTTP server thread, scrape port, and requires a Prometheus instance in the deployment. Overkill for a single-device driver.
+
+**Why NOT statsd:** Requires a statsd server. Same problem.
+
+**Confidence: HIGH** — Redis HSET is already used for `hackrf:state`; metrics follow the same pattern at no additional dependency cost.
+
+---
+
+### Error Handling Hardening — Custom Exceptions
+
+**Decision: No new package needed.**
+
+Custom exception hierarchies are pure Python stdlib. A well-structured exception module is sufficient:
+
+```python
+# hackrf_driver/exceptions.py
+class HackRFError(Exception):          # base
+    pass
+
+class HackRFDeviceError(HackRFError):  # hardware-level
+    pass
+
+class HackRFConfigError(HackRFError):  # parameter validation
+    pass
+
+class HackRFTXAuthError(HackRFError):  # TX authorization denied
+    pass
+
+class HackRFWatchdogError(HackRFError): # watchdog timeout
+    pass
+```
+
+**For pymayhem:**
+```python
+# pymayhem/exceptions.py
+class MayhemError(Exception):
+    pass
+
+class MayhemTimeoutError(MayhemError):
+    pass
+
+class MayhemCommandError(MayhemError):
+    pass
+```
+
+**Why NOT pydantic for input validation:** pydantic (v2, ~1.5 MB wheel) is well-suited for API boundaries but is heavy for a hardware driver that validates 6 numeric parameters. Use Python's built-in type checking + `ValueError` raises with `@dataclass` for structured config. This keeps pymayhem's dependency list clean (pyserial only).
+
+**Why NOT cerberus / voluptuous:** Same argument — external validation libraries for internal numeric range checks add unnecessary weight.
+
+---
+
+### Device Watchdog — IQ Sequence Numbers
+
+**Decision: No new package needed.**
+
+The watchdog is a daemon threading.Thread that checks a `last_rx_timestamp` float, restarting the USB stream if it goes stale beyond a configurable timeout. IQ sequence numbers are integer counters incremented in the RX callback and published in the Redis stream entry alongside the IQ samples.
+
+```python
+# Sequence number in XADD payload
+r.xadd("hackrf:iq:stream", {"seq": str(self._seq), "samples": iq_bytes})
+self._seq += 1  # gaps detectable by consumers
+```
+
+No external package needed. `threading.Thread`, `time.monotonic()`, and `threading.Event` from stdlib handle the watchdog loop.
+
+---
+
+### Dead-Letter Queue and TX Dry-Run
+
+**Decision: No new package needed.**
+
+Dead-letter queue uses existing redis-py: failed command entries are XADD'd to `hackrf:cmd:dlq` with error context. TX dry-run validation is a pure Python pre-flight function that validates parameters against the allowlist before touching hardware.
+
+---
+
+### ROS2 Spectrum Topic
+
+| Decision | Rationale |
+|----------|-----------|
+| Use `std_msgs/Float32MultiArray` for `/hackrf/spectrum` initially | No standard `sensor_msgs/Spectrum` type exists in ROS2 Humble. Creating a custom message package adds build-system overhead. Float32MultiArray with layout metadata (center_freq, bin_width, nfft in the header) is consistent with the existing `/hackrf/iq` pattern and can be promoted to a custom message in a future milestone without breaking the Redis-side pipeline. |
+
+**Note:** The ROS2 docs and community recommend custom message types for semantic clarity, but the tradeoff at this stage — avoiding a new `hackrf_msgs` package with CMakeLists, package.xml, build infrastructure — favors reusing Float32MultiArray. Revisit if downstream consumers need strongly typed spectrum messages.
+
+---
+
+## Full v2.0 Dependency Delta
+
+### hackrf_driver/setup.cfg additions
+
+```ini
+[options]
+install_requires =
+    pymayhem
+    redis>=7.4.0
+    hiredis>=3.3.1
+    PyYAML>=5.4
+    numpy
+    sigmf>=1.7.2          # NEW: IQ recording
+
+[options.extras_require]
+hardware =
+    pyhackrf2
+spectral =
+    scipy>=1.11,<1.16     # NEW: Welch PSD / spectrogram (Python 3.10 compatible)
+test =
+    pytest
+```
+
+### pymayhem/setup.cfg additions
+
+```ini
+[options.extras_require]
+async =
+    pyserial-asyncio-fast>=0.16   # NEW: asyncio serial transport
+test =
+    pytest
+```
+
+### hackrf_ros/setup.py (no changes needed)
+
+BridgeNode has no new hardware dependencies — it reads from Redis only.
 
 ---
 
 ## Installation
 
 ```bash
-# Add to requirements or Dockerfile pip install block:
-pip install "redis>=7.4.0" "hiredis>=3.3.1" "pyserial>=3.5"
+# Core driver with IQ recording
+pip install "sigmf>=1.7.2"
+
+# Optional: spectral analysis (Welch PSD, spectrogram)
+pip install "scipy>=1.11,<1.16"
+
+# Optional: async pymayhem
+pip install "pyserial-asyncio-fast>=0.16"
 ```
 
 ```dockerfile
-# In Dockerfile, alongside existing pip installs:
-RUN pip3 install redis hiredis pyserial
+# In Dockerfile, add to existing pip install block:
+RUN pip3 install "sigmf>=1.7.2" "pyserial-asyncio-fast>=0.16"
+# scipy is optional — add only if spectral features are enabled
+# RUN pip3 install "scipy>=1.11,<1.16"
 ```
-
-**Note on Docker:** The existing container runs in host network mode. Redis on the host is reachable at `host.docker.internal` (or `172.17.0.1` on Linux Docker default bridge, or `localhost` when `--network host`). With `network: host` (current docker-compose.yaml setting), `localhost` resolves correctly inside the container.
 
 ---
 
@@ -144,28 +288,55 @@ RUN pip3 install redis hiredis pyserial
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| Redis client | redis-py 7.4.0 | aioredis | Merged into redis-py; abandoned as standalone |
-| Redis client | redis-py 7.4.0 | walrus | Abstraction overhead, no benefit for explicit stream control |
-| Redis client | redis-py 7.4.0 | redis-py 5.x/6.x | Maintenance-only; v7 is active series |
-| IQ transport | Redis Streams | Redis Pub/Sub | Pub/Sub loses messages on slow/disconnected consumers |
-| IQ transport | Redis Streams | Redis Lists (RPUSH/BLPOP) | Streams have built-in consumer groups, ID tracking, trimming |
-| Serial | pyserial 3.5 | pyserial-asyncio | No asyncio event loop in this driver; threaded model is correct |
-| TX safety | Redis key + TTL | ROS2 service authorization | Redis auth allows non-ROS consumers to participate in safety gate |
+| IQ file format | sigmf 1.7.2 | Raw numpy .tofile() | Loses all metadata; no interoperability with SDR tools |
+| IQ file format | sigmf 1.7.2 | CDIF/BLUE | Niche format; no Python first-class support |
+| FFT/spectral | numpy.fft (base), scipy optional | matplotlib.mlab.psd | Requires display backend; matplotlib is for visualization not headless computation |
+| FFT/spectral | numpy.fft (base), scipy optional | pyfftw | FFTW C binding adds compile-time dependency; numpy.fft sufficient for 10 MSPS |
+| Async serial | pyserial-asyncio-fast 0.16 | pyserial-asyncio 0.6 | Unmaintained since 2022; no eager-write optimization |
+| Async serial | pyserial-asyncio-fast 0.16 | aioserial | Uses threading under asyncio hood, not native Transport |
+| Metrics | Redis HSET pattern | prometheus_client | Requires Prometheus infrastructure; no scrape target in deployment |
+| Input validation | stdlib ValueError + dataclass | pydantic v2 | 1.5 MB wheel overkill for 6 numeric hardware parameters |
+| Custom exceptions | stdlib Exception hierarchy | tenacity (retry) | Retry logic is device-specific; tenacity adds dep for what is 10 lines of code |
+
+---
+
+## What NOT to Use
+
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| scipy >=1.16 | Requires Python >=3.11; ROS2 Humble uses Python 3.10 | scipy >=1.11,<1.16 or numpy.fft |
+| pyserial-asyncio (original) | Unmaintained since 2022; slower writes | pyserial-asyncio-fast |
+| aioredis | Merged into redis-py v4.2; abandoned standalone | redis-py 7.x async client (already in stack) |
+| pyfftw | FFTW C-library build dep; no ARM64 wheel guarantee | numpy.fft (vectorized, sufficient throughput) |
+| GNURadio Python bindings | 500+ MB install; not in Docker target | Direct pyhackrf2 + numpy.fft |
+| prometheus_client | Requires a separate Prometheus server to be useful | Redis HSET for metrics (hackrf:metrics hash) |
+
+---
+
+## Version Compatibility
+
+| Package | Compatible With | Notes |
+|---------|-----------------|-------|
+| sigmf 1.7.2 | numpy any, Python 3.7–3.14 | No version conflict with existing numpy pin |
+| scipy 1.15.x | numpy >=1.23, Python 3.10–3.13 | Last series supporting Python 3.10 (Humble) |
+| pyserial-asyncio-fast 0.16 | pyserial >=3.5, Python >=3.9 | Compatible with existing pyserial 3.5 pin |
+| sigmf 1.7.2 | jsonschema >=4.0 | jsonschema not currently in stack; no known conflicts |
 
 ---
 
 ## Sources
 
-- redis-py PyPI: https://pypi.org/project/redis/ (verified 2026-03-29)
-- hiredis PyPI: https://pypi.org/project/hiredis/ (verified 2026-03-29)
-- redis-py releases: https://github.com/redis/redis-py/releases (v7.4.0, March 24, 2025)
-- hiredis releases: https://github.com/redis/hiredis-py/releases (v3.3.1, March 16, 2026)
-- pyserial PyPI: https://pypi.org/project/pyserial/ (v3.5, latest stable)
-- Mayhem firmware USB Serial Console wiki: https://github.com/portapack-mayhem/mayhem-firmware/wiki/USB-Serial-Console
-- Redis Streams vs Pub/Sub: https://dev.to/lovestaco/redis-pubsub-vs-redis-streams-a-dev-friendly-comparison-39hm
-- redis-py thread safety: https://github.com/redis/redis-py/issues/3669
-- redis-py connections docs: https://redis.readthedocs.io/en/stable/connections.html
+- SigMF PyPI: https://pypi.org/project/SigMF/ (v1.7.2, verified 2026-03-30)
+- sigmf-python GitHub: https://github.com/sigmf/sigmf-python (pyproject.toml deps: numpy, jsonschema)
+- pyserial-asyncio-fast PyPI: https://pypi.org/project/pyserial-asyncio-fast/ (v0.16, 2025-03-27)
+- pyserial-asyncio-fast GitHub: https://github.com/home-assistant-libs/pyserial-asyncio-fast
+- scipy PyPI: https://pypi.org/project/scipy/ (v1.17.1 current; v1.15.x last Python 3.10 series)
+- scipy release notes: https://docs.scipy.org/doc/scipy/release.html
+- numpy PyPI: https://pypi.org/project/numpy/ (v2.4.4, 2026-03-29)
+- PySDR IQ Files guide: https://pysdr.org/content/iq_files.html (SigMF format overview)
+- ROS2 Humble std_msgs: https://docs.ros.org/en/ros2_packages/humble/api/std_msgs/ (Float32MultiArray)
 
 ---
 
-*Stack research: 2026-03-29*
+*Stack research for: HackRF ROS2 Driver v2.0 new signal capabilities, hardening, observability*
+*Researched: 2026-03-30*

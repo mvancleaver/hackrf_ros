@@ -1,124 +1,215 @@
-# Domain Pitfalls
+# Pitfalls Research
 
-**Domain:** HackRF One SDR ROS2 driver — Redis integration, Mayhem serial control, TX capabilities
-**Researched:** 2026-03-29
-**Confidence:** HIGH (confirmed against libhackrf issue tracker, Mayhem wiki, Redis docs, rclpy issues)
+**Domain:** HackRF ROS2 Driver v2.0 — Adding hardening, observability, and signal capabilities to existing three-package system
+**Researched:** 2026-03-30
+**Confidence:** HIGH (based on direct codebase inspection + confirmed against Python docs, Redis docs, libhackrf tracker, asyncio dev guide)
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause deadlocks, data loss, hardware damage, or legal liability.
+Mistakes that cause deadlocks, data corruption, silent regressions, or hardware damage.
 
 ---
 
-### Pitfall 1: Calling hackrf_stop_rx From Inside the RX Callback (Deadlock)
+### Pitfall 1: Custom Exceptions Break Existing Callers That Catch `Exception` or `bool`-Check Return Values
 
-**What goes wrong:** `hackrf_stop_rx()` (and by extension `pyhackrf2`'s `stop_rx()`) must be called from the main thread. The libhackrf transfer callback runs in a libusb async thread. If any code path inside `_rx_callback` calls `stop_rx()` — directly or via a signal to the ROS node — it will deadlock: the transfer thread waits for itself to finish.
+**What goes wrong:**
+The existing pymayhem domain methods (`appstart`, `setfreq`, `radioinfo`) return `bool` or `dict` on success and silently swallow errors. When v2.0 replaces these returns with raised custom exceptions (`MayhemCommandError`, `MayhemTimeoutError`, etc.), any existing caller that does `if client.radio.setfreq(...)` or uses a bare `try/except Exception` will either silently pass on a raised exception it does not catch, or will be broken by a `bool` return that never arrived.
 
-**Why it happens:** libhackrf's internal transfer cancellation uses a pthread condition variable. The callback thread cannot cancel itself. The existing codebase already has `*args` and commented-out paths that suggest confusion about when to stop; future TX/serial integration increases the risk of adding inadvertent cross-thread stop calls.
+The HackRFDriver `_COMMAND_HANDLERS` dispatch table calls these methods directly via lambda (e.g., `lambda driver, p: driver._mayhem.setfreq(int(p['freq_hz']))`). If `setfreq` raises instead of returning False, the lambda propagates the exception up to `_dispatch_command`, which has a generic `except Exception` catch — this is actually fine — but the Redis state is never updated to reflect the failure. Silent success from the Redis consumer's perspective despite a hardware failure.
 
-**Consequences:** The node hangs indefinitely. The HackRF RX LED stays on. The only recovery is killing the process and power-cycling the device. This is a confirmed, closed upstream issue — maintainers explicitly do not recommend Python for start/stop cycling.
+**Why it happens:**
+Phase 5 refactored pymayhem into a clean standalone package with `bool` return contracts. v2.0 wants richer error signaling via exceptions, which is correct design. But the calling code in `hackrf_driver/redis_bridge.py`, `hackrf_driver/driver.py`, and any downstream scripts written by users against the v1 API all have implicit contracts with the `bool` return. The change looks like a clean internal refactor but it is actually a public API break.
 
-**Prevention:**
-- The `_rx_callback` must return `0` (continue) or a non-zero value (signal stop) — it must NEVER call `stop_rx()` directly.
-- Use a `threading.Event` to signal the main/timer thread that a stop is needed; let that thread call `stop_rx()`.
-- Minimize start/stop cycles. Prefer keeping RX running continuously and gating publication instead of stopping the stream on reconfiguration.
-- Add a timeout wrapper around any `stop_rx()` call (e.g., `signal.alarm` or a watchdog thread) so a deadlock does not hang the process permanently.
+**How to avoid:**
+- Decide the exception boundary at the `_dispatch_command` level: catch pymayhem exceptions, map them to structured error responses in Redis (e.g., `hackrf:cmd:last_error`), and keep the lambda dispatch table unchanged. The domain methods raise; the bridge layer catches and translates.
+- Do not change the `bool`-return surface of domain methods if external scripts already depend on it. Instead add a separate `strict=True` mode that raises, or make exceptions the default only in a new major version of pymayhem.
+- Add regression tests that call domain methods via the old `bool`-check pattern and verify they still work after the exception refactor.
+- Update all internal `_COMMAND_HANDLERS` lambdas to wrap calls in `try/except` and publish error state to Redis rather than propagating bare exceptions to the generic handler.
 
-**Detection:**
-- RX LED remains lit after `stop_rx()` is called.
-- Node becomes unresponsive; `destroy_node()` never returns.
-- Observed during parameter reconfiguration: `_configure_hackrf()` currently calls `stop_rx()` in a `try` block with no timeout — this is the immediate live risk.
+**Warning signs:**
+- Redis consumers see commands dispatched with no state update and no error log entry.
+- Tests that mock `_send_command` to return `['error: unknown app']` still pass even after exception conversion (because the mock path doesn't exercise the raise path).
+- `hackrf:state` shows stale `active_app` after a failed `appstart`.
 
-**Phase:** RX pipeline robustness (first active milestone phase). Fix before adding Redis or serial.
-
----
-
-### Pitfall 2: Unbounded IQ Buffer + Redis Writes in the Same Thread = Guaranteed Data Loss
-
-**What goes wrong:** The current `_rx_callback` appends to `current_samples_buffer` using `np.append()` (which allocates a new array on every call). The timer at 5 ms polls the buffer. At 8 MSPS, pyhackrf2 delivers roughly 16,000 bytes per callback invocation — thousands of calls per second. If Redis `XADD` is called inside the same timer callback that drains the buffer, any Redis latency spike (network, serialization, key eviction) causes the buffer to grow unboundedly.
-
-**Why it happens:** `np.append()` is O(n) per call. At 8 MSPS the buffer grows at approximately 32 MB/s of float32 data before any Redis drain occurs. A 100 ms Redis round-trip jitter = ~3.2 MB of buffer spike. Without a cap, this becomes an OOM in minutes.
-
-**Consequences:** Python process killed by OOM killer (silent in Docker). Data loss with no warning. Potentially unstable ROS node that takes the whole container down.
-
-**Prevention:**
-- Replace `np.append()` with a `collections.deque(maxlen=N)` or a pre-allocated `numpy` ring buffer. The maxlen acts as the backpressure mechanism — oldest samples are dropped rather than memory growing.
-- Use `XADD key MAXLEN ~ 1000 * ...` (approximate trimming) so Redis also caps its own memory from this stream.
-- Dedicate a separate thread (not the ROS timer) for Redis writes, using a thread-safe queue (`queue.Queue(maxsize=N)`) as the handoff. The RX callback enqueues; the Redis thread dequeues and publishes.
-- Never block the RX callback or ROS timer waiting on a network call.
-
-**Detection:**
-- Container memory grows monotonically under `docker stats`.
-- Buffer size log crosses 100K samples with no sign of draining.
-- Redis publish latency measured above 10 ms consistently.
-
-**Phase:** Redis IQ publishing. Must be designed correctly from the start — retrofitting backpressure after the pipeline is built is expensive.
+**Phase to address:** Custom exceptions phase (first v2.0 phase). Must be locked before any other phase modifies pymayhem domain return contracts.
 
 ---
 
-### Pitfall 3: TX Without Antenna Physically Damages the HackRF
+### Pitfall 2: Watchdog Thread Acquires `_device_lock` and Deadlocks With `_configure_device`
 
-**What goes wrong:** Transmitting with no antenna (or a severely mismatched one) causes the output amplifier (U25, MGA-81563) to receive full reflected power. The component is rated to approximately +13 dBm input; a mismatched load at even modest TX power can exceed this, permanently destroying the front-end amplifier. The HackRF will still enumerate over USB but TX output will be near zero.
+**What goes wrong:**
+`HackRFDriver._configure_device()` holds `_device_lock` (RLock) for the duration of `stop_rx()` + `time.sleep(0.1)` + `start_rx()` — a window of at least 100–300 ms. If the health watchdog thread also acquires `_device_lock` to call `hackrf.get_rssi()` or similar health probe, it will block for up to 300 ms every time a reconfiguration fires.
 
-**Why it happens:** The software has no way to detect whether an antenna is connected. There is no hardware interlock. The TX authorization guardrail in the project requirements gates commands behind user intent — but it does not prevent hardware damage from a careless operator who authorizes TX without attaching an antenna.
+More dangerous: if the watchdog detects a hung device and calls `_try_connect()` while `_configure_device` holds the lock, the watchdog thread blocks indefinitely. Because `_configure_device` is called from the Redis bridge thread (via command dispatch), and the watchdog fires on a `threading.Timer`, neither thread is the main thread. The GIL cannot help here — this is a pure Python lock contention deadlock with no timeout.
 
-**Consequences:** Permanent hardware damage. No repair path without component-level rework. The only HackRF in this project is a single device — destroying it halts the entire project.
+The existing `_device_lock` is an RLock (reentrant), so the SAME thread can re-enter it. But the watchdog runs in a DIFFERENT thread. RLock does not protect against cross-thread blocking.
 
-**Prevention:**
-- The TX authorization flow must include a checklist prompt that explicitly asks the operator to confirm antenna is connected, not just "do you want to transmit?".
-- Log a persistent `WARNING` to the ROS logger and Redis state key every time TX is authorized, with the message "CONFIRM ANTENNA CONNECTED BEFORE TX".
-- Set a conservative default TX gain (VGA TX gain 0 dB) that requires an explicit override, rather than defaulting to a higher power level.
-- Document the hardware damage failure mode in the node's startup banner.
+**Why it happens:**
+The watchdog is a new daemon thread added to an existing threading model that was designed for two threads (RX callback + IQ publish loop). Adding a third thread that touches the device changes the lock contention profile. The natural first implementation of a watchdog — "check device health, take corrective action" — requires device access, which means acquiring the lock.
 
-**Detection:** No warning sign before damage occurs. Post-damage: TX LED activates but spectrum analyzer shows near-zero output. Prevention is the only option.
+**How to avoid:**
+- Give the watchdog a read-only health signal path that does NOT acquire `_device_lock`. The simplest approach: check `is_hackrf_streaming` and whether the `_redis_queue` is draining (i.e., `_redis_queue.qsize()` is nonzero) rather than probing the hardware directly.
+- If the watchdog must touch the device, use `_device_lock.acquire(timeout=0.5)` and treat a timeout as a "driver is busy" signal, not a failure. Log and skip the health check rather than blocking.
+- Separate the watchdog's "detect unhealthy" path (lock-free: check queues, timers, event flags) from its "take corrective action" path (which posts a reconnect request to a queue rather than directly calling `_try_connect`). The main loop drains the correction queue.
+- Add an explicit watchdog design decision in the phase plan before writing any code.
 
-**Phase:** TX capability phase. Address in the authorization guardrail design, not as an afterthought.
+**Warning signs:**
+- `_configure_device` takes longer than 500 ms (watchdog blocked waiting for the lock).
+- Watchdog fires but `is_hackrf_streaming` returns to True slower than expected after a simulated failure.
+- Log shows watchdog "device probe" entries interleaved with reconfiguration entries.
 
----
-
-### Pitfall 4: Mayhem Serial Mode Conflict — Serial Console and HackRF Bulk Transfer Are Mutually Exclusive
-
-**What goes wrong:** The Mayhem firmware wiki states explicitly: "You SHOULD NOT enter HackRF mode when using the serial console." When the PortaPack is put into HackRF mode (the blue-screen USB passthrough mode), the serial ACM interface becomes unavailable or unreliable. The project relies on pyhackrf2 (libusb bulk transfer, which requires HackRF mode) AND serial `/dev/ttyACM1` (which requires Portapack mode) simultaneously.
-
-**Why it happens:** The PortaPack has two distinct USB personalities depending on firmware mode. In Portapack mode, USB exposes a CDC-ACM serial interface for the ChibiOS shell. In HackRF mode, it exposes the standard HackRF USB bulk interface for libusb/pyhackrf2. These are not the same mode.
-
-**Consequences:** If the driver tries to open `pyhackrf2.HackRF()` while the device is in Portapack mode, libusb will fail to find the expected USB endpoints, giving `HACKRF_ERROR_LIBUSB (-1000)`. If the driver tries to open serial while in HackRF mode, the ACM device may not enumerate at all.
-
-**Prevention:**
-- Treat the two interfaces as separate device states and define a state machine: "Portapack mode" for serial commands (app control, TX via Mayhem), "HackRF mode" for raw IQ streaming (pyhackrf2).
-- Understand whether this firmware version allows concurrent access or requires a mode switch via the `hackrf` serial command. Test empirically with the target device before writing the integration layer.
-- Design the driver to detect which mode the device is in on connection and communicate the constraint clearly in error messages.
-- Consider whether the project actually needs simultaneous IQ streaming and Mayhem serial control, or whether these are sequential operations.
-
-**Detection:**
-- `pyhackrf2.HackRF()` raises `HACKRF_ERROR_LIBUSB` when the device is in Portapack shell mode.
-- `/dev/ttyACM1` is absent or unresponsive when the device is in HackRF mode.
-- USB enumeration shows different VID/PID or interface descriptors between modes.
-
-**Phase:** Serial Mayhem control phase and RX pipeline phase. Resolve the mode architecture question before writing either integration.
+**Phase to address:** Device health watchdog phase. Design the lock protocol before writing the watchdog thread.
 
 ---
 
-### Pitfall 5: Accidental Transmission on Protected Frequencies
+### Pitfall 3: IQ Recording Blocks the `_redis_queue` Drain Thread and Causes Drop-Oldest Data Loss
 
-**What goes wrong:** HackRF covers 1 MHz to 6 GHz. Without frequency validation in the TX path, a bug or malformed Redis command could trigger transmission on emergency services (700/800 MHz), GPS (1.575 GHz), aviation (108–137 MHz), or cellular bands — all of which carry serious legal liability under FCC Part 97/Part 15 and equivalents in other jurisdictions. HackRF does not have hardware frequency locks.
+**What goes wrong:**
+The IQ pipeline is: `_rx_callback` → `_redis_queue.put_nowait()` → `RedisBridge._drain_iq_queue()` → `_xadd_iq()`. The `_drain_iq_queue` loop runs in the `redis_bridge` daemon thread. If IQ recording writes to disk inside this same thread, any file I/O stall (buffer flush, ext4 journal commit, NFS, tmpfs exhaustion) blocks the drain loop. While it is blocked, `_rx_callback` runs `_redis_queue.get_nowait()` + `put_nowait()` (drop-oldest) and discards samples. The recording file will have gaps even though no error was logged.
 
-**Why it happens:** The Redis command interface accepts parameters from external consumers with no inherent validation. A consumer sending a malformed frequency value, or a developer testing with a "convenient" frequency, can inadvertently transmit on a protected band.
+At 8 MSPS with float32, the Redis queue fills in approximately 64 × 8192-byte chunks = ~524 KB, which takes about 65 ms to overflow at full rate. A single `fsync()` or journal commit on a spinning disk takes 5–20 ms. On an SD card (Jetson Nano), this can be 50–200 ms. The Jetson ARM64 target in docker-compose.yaml makes this more likely, not less.
 
-**Consequences:** FCC enforcement action, fines, criminal liability for deliberate interference. Amateur radio bands require a license. The driver's TX authorization guardrail must validate frequency, not just intent.
+**Why it happens:**
+The natural place to add recording is "after XADD, also write to file" — it is one line of code. It is invisible in testing on an SSD development machine with a warm buffer cache. It only fails on the actual Jetson hardware with a real SD card under continuous load.
 
-**Prevention:**
-- Maintain an allowlist of safe test frequencies (ISM bands: 915 MHz, 2.4 GHz, 5.8 GHz) and require explicit override to transmit elsewhere.
-- Implement a frequency validation function that rejects TX requests outside explicitly permitted bands: reject anything not in a declared safe zone.
-- Log every TX authorization with timestamp, frequency, power, and duration to a persistent Redis key — creates an audit trail.
-- Make the allowlist configurable but default to the narrowest safe set (e.g., 2.4 GHz ISM only) rather than permissive.
-- Never permit TX in the 406–406.1 MHz EPIRB band, 121.5 MHz (aviation distress), 156.8 MHz (maritime distress), or GPS L1/L2 regardless of authorization.
+**How to avoid:**
+- Introduce a dedicated recorder thread with its own bounded queue (`recording_queue = queue.Queue(maxsize=128)`). The `_xadd_iq` path posts a copy of the raw bytes to `recording_queue` in addition to XADD. The recorder thread drains `recording_queue` and writes to disk — independently of the Redis bridge thread.
+- Use non-blocking I/O: `O_NONBLOCK` on Linux file writes is unreliable, but writing to a `BytesIO` accumulator and flushing periodically (every N seconds) reduces the number of fsync calls.
+- Pre-allocate the recording file with `fallocate()` before the first write to avoid filesystem metadata updates during the stream.
+- For SigMF: write the `.sigmf-data` file first using buffered writes; write the `.sigmf-meta` JSON file only on recording stop (not incrementally during streaming).
+- Test explicitly on the target hardware with `dd if=/dev/zero of=/tmp/test bs=4K count=10000` running concurrently to verify the pipeline handles I/O pressure.
 
-**Detection:** No hardware interlock will catch this. Frequency validation must be enforced in software. An absent allowlist check is the detection trigger during code review.
+**Warning signs:**
+- `recording_queue.qsize()` stays at 0 (never fills) on SSD but spikes to maxsize on Jetson SD card.
+- SigMF file has discontinuous timestamps (sample count resets or jumps).
+- `_redis_queue.qsize()` spikes to 64 (maxsize) during recording sessions but not during non-recording sessions.
+- Process RSS grows during recording (accumulator not being flushed).
 
-**Phase:** TX authorization guardrails phase. This must be in the first TX implementation — cannot be deferred to a later hardening phase.
+**Phase to address:** IQ recording (SigMF) phase. Separate recording thread from the Redis bridge thread before writing any disk I/O.
+
+---
+
+### Pitfall 4: Continuous FFT on the `_redis_queue` Drain Thread Saturates the CPU and Collapses IQ Throughput
+
+**What goes wrong:**
+`np.fft.fft()` on 8192 samples at 8 MSPS runs approximately every 1 ms (8192 / 8,000,000 = ~1 ms per chunk). On Python 3.10+ with GIL, `numpy.fft.fft()` releases the GIL internally for its C-level computation. However, the per-call Python overhead (array allocation, input validation, output array creation) is still subject to the GIL. At 1000 FFT calls/second, this overhead amounts to 10–30% GIL hold time on a Cortex-A57 (Jetson Nano), starving the RX callback thread.
+
+More concretely: the existing `_drain_iq_queue` loop runs `_xadd_iq()` in a tight loop. If FFT is added inline here, each iteration now takes 1–2 ms instead of ~0.2 ms (XADD only). The loop slows down 5–10x. The queue fills faster than it drains. Drop-oldest kicks in. IQ data is lost even though no error is raised.
+
+Waterfall computation (sliding window FFT + magnitude + log10 + clip) is 3–5x more expensive than a single FFT. If the waterfall is computed for every chunk it is unusable.
+
+**Why it happens:**
+Spectral analysis is added as "post-processing on existing data" — the IQ data is already there in the drain loop. Adding FFT inline feels like a one-liner. It is, until the CPU budget is exhausted.
+
+**How to avoid:**
+- Spectral analysis runs in a DEDICATED thread, consuming from a separate bounded queue (`spectrum_queue = queue.Queue(maxsize=32)`). The `_xadd_iq` path posts to `spectrum_queue` only when spectral analysis is enabled and the queue is not full (non-blocking put, discard if full).
+- Throttle the FFT rate independently of the IQ rate. At 8 MSPS a useful spectrum update rate is 10–50 Hz (not 1000 Hz). The spectrum thread sleeps between updates: `time.sleep(1.0 / spectrum_update_hz)`.
+- Use `numpy.fft.rfft()` instead of `fft()` for real-valued signals — it is 2x faster for IQ magnitude spectra.
+- Pre-allocate the FFT input/output buffers once; reuse them instead of allocating per-call.
+- On Jetson: profile first. `np.fft.fft` may call OpenBLAS routines that create their own thread pools. Limit OpenBLAS threads: `os.environ['OPENBLAS_NUM_THREADS'] = '1'` before the first numpy import.
+
+**Warning signs:**
+- `spectrum_queue.qsize()` is always 0 (spectrum thread is slower than producer — dropping all spectra).
+- CPU usage jumps from ~20% to ~90% when spectral analysis is enabled (drain thread saturated).
+- `_redis_queue.qsize()` spikes when spectral analysis is running (RX callback cannot drain).
+- XADD latency increases from <1 ms to >5 ms during spectral analysis.
+
+**Phase to address:** Spectral analysis phase. Dedicated thread architecture must be specified in the phase plan before writing FFT code.
+
+---
+
+### Pitfall 5: Frequency Hopping + TX Guards = Double Lock Contention or Skipped Guard Check
+
+**What goes wrong:**
+Frequency hopping calls `_set_center_frequency()` + `_configure_device()` in rapid succession. `_configure_device()` holds `_device_lock` for 100–300 ms per hop. If hop intervals are shorter than 300 ms (e.g., 100 ms hop schedule), hops queue behind the lock and execute late — the hop scheduler drifts, and the actual frequency sequence no longer matches the planned schedule. The scheduler cannot detect this drift because `threading.Timer` fires once and does not self-correct for accumulated delay.
+
+More dangerous: if a hop fires during an active TX, the hop scheduler calls `_set_center_frequency()`, which calls `_configure_device()`, which calls `stop_rx()`. But TX holds `_tx_lock` and is waiting for `_start_rx_fn` to complete. Depending on how the TX stop/start path is wired, this can create a classic ABBA lock deadlock:
+- Hop thread: holds `_device_lock`, waiting for TX to finish
+- TX thread: holds `_tx_lock`, waiting for `_device_lock` (to start RX after TX)
+
+**Why it happens:**
+The hop scheduler is a new time-driven subsystem layered on top of an existing device reconfiguration path that was designed for infrequent, user-initiated changes. The lock protocol was never designed to handle sub-second reconfiguration cycles, and it was never designed to account for a third concurrent path (TX) that also holds device locks.
+
+**How to avoid:**
+- The hop scheduler must check `TXController._is_transmitting` before scheduling any hop. If TX is active, defer the hop (log a warning, reschedule after TX completes + safety margin).
+- Use a single reconfiguration queue: hop requests, Redis `setfreq` commands, and parameter updates all post to the same `config_queue`. A single worker thread drains the queue and calls `_configure_device()` serially, preventing concurrent reconfiguration attempts.
+- Hop timing: use `time.perf_counter()` to measure actual hop completion time and compute drift. If the realized hop rate is more than 20% slower than requested, log a warning and automatically reduce the hop rate to what the hardware can sustain.
+- `threading.Timer` precision on Linux is ~10–50 ms jitter due to OS scheduling. A 100 ms hop interval has ±50% jitter. The hop scheduler must account for this — do not assume `threading.Timer(0.1, fn)` fires at exactly 100 ms.
+
+**Warning signs:**
+- Hop log entries show timestamps further apart than the configured interval.
+- `is_hackrf_streaming` flips to False during a hop and never returns to True (deadlock).
+- `_tx_lock` acquire times out (if a timeout is set) during a hop cycle.
+- Redis `hackrf:state.center_frequency` shows stale frequency values during active hopping.
+
+**Phase to address:** Frequency hopping phase. TX guard interaction must be documented as a constraint in the phase plan. Lock ordering must be explicitly defined.
+
+---
+
+### Pitfall 6: pymayhem Async API Creates a Background Event Loop Thread That Fights the Existing `_serial_lock`
+
+**What goes wrong:**
+`MayhemSerial._send_command()` acquires `_serial_lock` (a `threading.Lock()`) and blocks for up to `_command_timeout` seconds (default 3 s). An async wrapper around this (`async def setfreq_async(self, freq_hz)`) that does `await asyncio.to_thread(self._serial._send_command, ...)` correctly offloads the blocking call to a thread. But the asyncio event loop for pymayhem must live in its own thread (since the main driver is not async). This means:
+
+1. `asyncio.to_thread()` submits the serial call to the event loop's default `ThreadPoolExecutor`.
+2. The serial call blocks in the executor thread, holding `_serial_lock`.
+3. Any other coroutine that calls a domain method while the lock is held will also block in the executor — which is correct — but if two coroutines fire simultaneously, both may try to acquire `_serial_lock` in executor threads. The `ThreadPoolExecutor` default pool size is `min(32, os.cpu_count() + 4)`. On a Jetson with 4 cores, that is 8 threads. Two blocking serial calls × up to 3 s each = the pool can appear healthy while serial is serialized at the lock level.
+4. The async API will have lower throughput than the synchronous API for burst command sequences, because coroutine overhead adds latency per command.
+
+The bigger risk: if the pymayhem async library is used from code that already has an asyncio event loop running (e.g., future ROS2 nodes using rclpy's async executors), calling `asyncio.run()` to launch a new loop raises `RuntimeError: This event loop is already running`. Users of the async API must be told to use `asyncio.get_event_loop().run_until_complete()` or `asyncio.ensure_future()` from within an existing loop — but these are deprecated/dangerous patterns.
+
+**Why it happens:**
+The async API is added as a convenience wrapper around the synchronous blocking serial implementation. The underlying serial I/O is still blocking pyserial. Wrapping blocking I/O in async is safe via `asyncio.to_thread()`, but the event loop lifecycle question ("who owns the loop?") is never answered, and callers in different contexts make different assumptions.
+
+**How to avoid:**
+- Make the pymayhem async API a separate class (`AsyncMayhemClient`) that explicitly documents: "You must bring your own event loop. Use `asyncio.to_thread()` internally. Never call `asyncio.run()` internally."
+- Provide a clear example showing usage from three contexts: (a) standalone script with `asyncio.run()`, (b) inside an existing loop with `await asyncio.to_thread()`, (c) from a thread with `asyncio.run_coroutine_threadsafe()`.
+- Do NOT have the async API internally call `asyncio.run()` or `asyncio.get_event_loop()`. These are time bombs in library code.
+- The sync `MayhemSerial._send_command` with `_serial_lock` remains unchanged. The async API is purely a thin scheduling layer; it does not refactor the serial implementation.
+- Test explicitly: run `AsyncMayhemClient` from within an `asyncio.run()` context AND from within a `threading.Thread` that calls `asyncio.run_coroutine_threadsafe()` to verify both work.
+
+**Warning signs:**
+- `RuntimeError: This event loop is already running` in any test.
+- `asyncio.get_event_loop()` deprecation warning in Python 3.10+ logs.
+- Command throughput of async API is lower than sync API for sequential calls (overhead dominates).
+- `_serial_lock` contention visible in thread profiler when two async clients are used concurrently.
+
+**Phase to address:** pymayhem async API phase. Document the event loop ownership contract in the phase plan before writing any async code.
+
+---
+
+### Pitfall 7: Redis Reconnection Gap in BridgeNode Publishes Stale or Missing State to ROS2
+
+**What goes wrong:**
+`BridgeNode._bridge_loop()` subscribes to `hackrf:iq:notify` via `pubsub.get_message()`. When Redis disconnects and reconnects, the pubsub subscription is silently dropped. The bridge loop exits on the `except Exception: break` path and does NOT restart. The `_stop_event` is never set, so `destroy_node()` is not called, and ROS2 does not know the bridge is no longer publishing. The `/hackrf/iq` and `/hackrf/state` topics go silent with no error published to ROS2 diagnostics.
+
+The current `RedisBridge.needs_reconnect` property is designed for the driver to poll. `BridgeNode` does not poll `needs_reconnect` — it has its own independent Redis connection that uses `pubsub.get_message()`. If the BridgeNode's Redis connection drops:
+1. `pubsub.get_message()` raises an exception.
+2. The bridge loop breaks (exits).
+3. The bridge thread dies silently.
+4. `/hackrf/iq` stops publishing.
+5. ROS2 subscribers see no data and no error.
+6. The ROS2 node shows as "alive" in `ros2 node list`.
+
+**Why it happens:**
+The BridgeNode was built with the assumption that Redis is always available (it is a local connection). Reconnection logic was deferred to "a later hardening phase" (i.e., v2.0). The `try/except` in the bridge loop breaks out instead of retrying. This is the correct graceful degradation behavior for startup, but wrong for a mid-session disconnect.
+
+**How to avoid:**
+- Replace the `break` in the bridge loop exception handler with a reconnect retry loop: close the pubsub, close the Redis connection, wait with exponential backoff (1–30 s), attempt `redis.Redis.ping()`, resubscribe to `hackrf:iq:notify`, reset `last_cmd_id = b'$'` to avoid replaying old commands.
+- Publish a ROS2 diagnostic message (`/hackrf/diagnostics` or similar) that reports `redis_connected: False` when the reconnect loop is active.
+- After reconnect, call `_publish_state()` immediately to push the last known state to ROS2 subscribers (avoiding stale state from before the disconnect).
+- The state after reconnect is: driver may have changed frequency, started/stopped RX, or changed gain while Redis was disconnected. BridgeNode must fetch current state with `HGETALL hackrf:state` after reconnect and publish it before resuming IQ forwarding.
+- Add a liveness timer: if no IQ message has been published in >5 s during an active session, log a warning. This is the canary for silent bridge thread death.
+
+**Warning signs:**
+- ROS2 topic `/hackrf/iq` has 0 Hz publish rate after a Redis restart.
+- `ros2 node list` still shows `hackrf_bridge_node` as alive.
+- `redis-cli PUBSUB CHANNELS` shows no `hackrf:iq:notify` subscribers.
+- Bridge thread is not in `threading.enumerate()` output.
+
+**Phase to address:** Redis reconnection hardening phase (first v2.0 phase alongside custom exceptions).
 
 ---
 
@@ -126,198 +217,254 @@ Mistakes that cause deadlocks, data loss, hardware damage, or legal liability.
 
 ---
 
-### Pitfall 6: Python GIL Limits True Parallelism Between RX Callback and ROS Executor
+### Pitfall 8: Observability Metrics Published at IQ Rate Saturate Redis With Tiny Messages
 
-**What goes wrong:** pyhackrf2's RX callback runs in a libusb-spawned C thread. When Python code executes in that callback (the `_rx_callback` function), it must acquire the GIL. The rclpy `spin()` executor also holds the GIL for callback dispatch. At high sample rates (8+ MSPS), these two GIL contenders create measurable latency spikes — the RX callback is delayed waiting for the executor, and ROS timer callbacks are delayed waiting for the RX callback to release.
+**What goes wrong:**
+If observability metrics (queue depths, drop counts, RX latency) are published to Redis on every `_xadd_iq()` call — which fires at approximately 1000 times/second — each metric write is a separate `HSET hackrf:metrics ...`. At 1000 HSET/s, each taking ~0.3 ms, the Redis bridge thread spends 300 ms/s on metric writes alone — 30% of its CPU budget. This is in addition to the XADD calls.
 
-**Why it happens:** rclpy's MultiThreadedExecutor has documented performance issues with high-frequency callbacks. At 500 Hz timer rates the CPU load is already problematic. The RX callback at 8 MSPS fires orders of magnitude more frequently.
+At this rate, Redis also receives 1000 small writes/s with no pipelining, causing significant round-trip overhead on localhost (typically 0.1–0.5 ms per command).
 
-**Consequences:** Samples dropped at the libhackrf level (libhackrf has internal USB transfer buffers; if the callback is too slow, transfers overflow). Jitter in Redis publish times. ROS timer callbacks miss their deadlines.
+**How to avoid:**
+- Publish metrics at a fixed low rate (1–5 Hz) using a separate timer, not on every XADD. Use `time.monotonic()` to throttle: `if now - last_metrics_publish > 0.2: publish_metrics()`.
+- Batch metric updates using a Redis pipeline: `pipe = redis.pipeline(transaction=False); pipe.hset(...); pipe.execute()`. One round-trip for all metrics.
+- Maintain in-memory counters (drop count, XADD count, queue high watermark) as Python integers; flush them to Redis atomically on the timer, not on each increment.
+- Use `EXPIRE` on metric keys with a TTL of 10–30 s to avoid stale metrics persisting after the driver stops.
 
-**Prevention:**
-- Keep `_rx_callback` as short as possible — only enqueue data to a `queue.Queue`, nothing else. Do not process, convert, or append numpy arrays in the callback.
-- Move all numpy conversion, Redis publishing, and ROS publishing to the timer or a dedicated thread that dequeues from the callback's queue.
-- Consider `numpy.frombuffer` (zero-copy) instead of array construction in the callback path.
-- Profile with `py-spy` before optimizing — verify the GIL is the actual bottleneck.
+**Warning signs:**
+- Redis CPU usage visible in `redis-cli INFO stats` under `total_commands_processed` growing at >1000/s.
+- Bridge thread CPU usage increases from ~5% to >30% when metrics are enabled.
+- IQ stream latency (time from `_rx_callback` to XADD) increases when metrics are enabled.
 
-**Detection:**
-- libhackrf reports overflow: callback returns `HACKRF_ERROR_STREAMING_THREAD_ERR`.
-- Dropped samples visible as discontinuities in IQ data (phase jumps, dropped chirps).
-- `py-spy` flame graph shows GIL wait time in RX callback thread.
-
-**Phase:** RX pipeline robustness phase.
-
----
-
-### Pitfall 7: Serial Port Device Path Instability in Docker
-
-**What goes wrong:** `/dev/ttyACM1` is assigned dynamically by the kernel. On container restart, host reboot, or device re-plug, the device may appear as `/dev/ttyACM0`, `/dev/ttyACM2`, or under a different path entirely. Docker volume mounts for `/dev/ttyACM1` that worked at first will silently fail after a replug. The container sees a stale device file.
-
-**Why it happens:** Linux ACM device numbering is assigned in enumeration order. If another USB serial device is present, or the HackRF is unplugged and replugged, the number can change. Docker does not automatically update device mappings after container start.
-
-**Consequences:** Serial connection silently fails; the node logs no error if pyserial opens the path but the device was reassigned. The node runs but serial commands are dropped with no feedback.
-
-**Prevention:**
-- Use `/dev/serial/by-id/` symlinks (stable across reboots) rather than `/dev/ttyACM1` in Docker device mappings and in code defaults.
-- Make the serial port path a ROS parameter and a configurable Docker environment variable.
-- Implement `pyserial` open-with-retry: if the port is not found, retry every 5 seconds with a clear log message rather than failing silently.
-- In Docker Compose, bind the stable by-id path: `devices: - /dev/serial/by-id/usb-Great_Scott_Gadgets_...: /dev/ttyACM1`.
-
-**Detection:**
-- Serial opens successfully but no response to commands (device path exists but wrong device is behind it).
-- `dmesg` on host shows ACM re-enumeration after container start.
-- `ls -la /dev/serial/by-id/` shows the actual stable path.
-
-**Phase:** Serial Mayhem control phase.
+**Phase to address:** Observability metrics phase.
 
 ---
 
-### Pitfall 8: Redis Stream Memory Growth Without MAXLEN
+### Pitfall 9: Dead-Letter Queue Grows Unboundedly Because No Discard or Archive Policy Is Defined
 
-**What goes wrong:** At 8 MSPS with 8192-sample publish chunks, the IQ data rate is approximately 32 MB/s (float32 interleaved). If Redis `XADD` is called without `MAXLEN`, the stream grows without bound. Redis is an in-memory store — the host will run out of RAM in under a minute of streaming if no consumer is reading or trimming.
+**What goes wrong:**
+A dead-letter queue for failed commands (commands that raised exceptions in `_dispatch_command`) is written to Redis as a stream: `hackrf:cmd:dead`. Without a `MAXLEN` on the XADD, it grows without bound. Failed commands may accumulate at high rates if, for example, a buggy Redis consumer sends malformed commands in a loop (e.g., a script with wrong JSON escaping).
 
-**Why it happens:** Redis Streams default to unbounded growth. Developers focus on the producer path and assume consumers will keep up. In practice, consumers may disconnect, restart, or be slower than the producer.
+More subtle: if the dead-letter queue is meant to be "reviewed by an operator," it will never be reviewed in practice. It silently fills Redis memory over days/weeks. The driver does not alert when the DLQ grows. The driver does not have a cleanup job.
 
-**Consequences:** Host Redis OOM → eviction policy kicks in (if configured) or Redis crashes. If Redis crashes, the ROS node's Redis publish calls start failing, producing a flood of error logs and potentially blocking the publisher thread.
+**How to avoid:**
+- Always use `XADD hackrf:cmd:dead MAXLEN ~ 500 * ...` — 500 entries is enough for forensic review; anything older is not useful.
+- Define a discard policy in the phase plan: DLQ is forensic only. It is NOT retried. Messages are discarded after 500 entries. An operator alert fires when DLQ size > 100 (early warning before overflow).
+- Log every DLQ write to the driver logger at WARNING level with the full command body. The logger is the primary notification path; the Redis DLQ is secondary.
+- Add a `EXPIRE hackrf:cmd:dead <TTL>` on each write to enforce maximum retention time (e.g., 24 hours) regardless of MAXLEN.
 
-**Prevention:**
-- Always use `XADD key MAXLEN ~ N * field value` — the `~` (approximate trim) is critical for performance; exact trimming is expensive.
-- For IQ data streams, a `MAXLEN` of 100–500 entries (depending on chunk size) is typically appropriate — this is a rolling window, not a history buffer.
-- Add Redis connection error handling with exponential backoff in the publisher thread, not bare `try/except` that silently swallows failures.
-- Publish IQ data using interleaved float16 or raw int8 bytes rather than float32 lists to reduce payload size by 2–4x.
+**Warning signs:**
+- `XLEN hackrf:cmd:dead` growing beyond 500 in normal operation (indicates something is wrong with a command producer).
+- Redis `used_memory` growing slowly over hours even when IQ stream is stable.
+- DLQ entries with identical `error` fields (same bug, repeated indefinitely).
 
-**Detection:**
-- `redis-cli INFO memory` shows `used_memory` growing monotonically.
-- `XLEN iq_stream_key` returns a very large number.
-- Redis latency increases as memory pressure builds.
-
-**Phase:** Redis IQ publishing phase. Include MAXLEN from the first `XADD` call — do not add it in a follow-up.
-
----
-
-### Pitfall 9: Mayhem Serial Command Response Parsing — No Guaranteed Prompt/Terminator
-
-**What goes wrong:** The Mayhem ChibiOS shell returns responses with a `ch>` prompt and `\r\n` line endings. There is no standardized response envelope — commands like `appstart`, `setfreq`, and `radioinfo` return different formats. Reading "until prompt" with a fixed timeout is fragile: if the command takes longer than expected (e.g., app startup involves firmware loading), the read times out mid-response, leaving partial data in the serial buffer that corrupts the next command's response.
-
-**Why it happens:** The Mayhem serial interface is a human-facing ChibiOS shell, not a machine protocol. It was designed for interactive terminal use, not programmatic parsing. There is no documented request-response framing.
-
-**Consequences:** Serial command handler enters a corrupted state. Subsequent commands receive partial previous responses. The only recovery is closing and reopening the serial port — which may itself fail due to Pitfall 7.
-
-**Prevention:**
-- Implement a proper serial command class with: send command, read until `ch>` prompt (not a fixed timeout), discard echo of the sent command, parse response lines.
-- Add a flush/resync routine: send an empty newline and drain the port before every command sequence.
-- Set a generous but bounded timeout (e.g., 5 seconds for `appstart`, 500 ms for `setfreq`) with explicit timeout error handling.
-- Test each command's response format against the target firmware version before writing the parser.
-- Treat the serial channel as stateful: track whether a command is in-flight and reject new commands until the previous one completes.
-
-**Detection:**
-- Responses contain fragments of previous command outputs.
-- `appstart` returns success but the wrong app is running.
-- Serial buffer has data remaining between command cycles.
-
-**Phase:** Serial Mayhem control phase.
+**Phase to address:** Dead-letter queue phase.
 
 ---
 
-### Pitfall 10: stop_rx / start_rx Rapid Cycling Causes HackRF Firmware State Corruption
+### Pitfall 10: TX Dry-Run Validation Is Bypassed Because It Shares the Same Guard Code Path as Live TX
 
-**What goes wrong:** Calling `stop_rx()` immediately followed by `start_rx()` in rapid succession (e.g., on every parameter change) causes an intermittent state where the RX LED stays lit but the callback is never triggered. This is distinct from the deadlock in Pitfall 1 — it is a firmware-level issue where the HackRF's USB transfer state does not fully reset between cycles.
+**What goes wrong:**
+A TX dry-run mode that validates frequency, IQ data shape, and gain settings without emitting RF is useful for automated testing. The natural implementation is: "call `start_tx()` with a `dry_run=True` flag, skip the `hackrf.start_tx()` hardware call but execute all guards." This seems safe.
 
-**Why it happens:** The HackRF USB transfer pipeline requires a brief settling period after `stop_rx()` before `start_rx()` is safe to call. The current `_configure_hackrf()` calls `stop_rx()` followed immediately by attribute assignment and `start_rx()` with no delay. Issue #916 in the libhackrf tracker confirms this as a known problem.
+But guards 1–4 in `TXController.start_tx()` consume the auth token (Guard 4: GETDEL). A dry-run that consumes the auth token makes the actual TX fail with `TXNotAuthorizedError`. Developers who test with dry-run first will be confused when the live TX fails immediately after.
 
-**Consequences:** The stream appears to start (no exception) but no callbacks fire. `is_hackrf_streaming` is True but no data is published. The node runs silently and publishes nothing.
+If the dry-run path skips the auth token consumption, it is no longer testing the complete guard sequence. It is testing 3 of 4 guards, which gives false confidence.
 
-**Prevention:**
-- Add a minimum 100 ms sleep between `stop_rx()` and `start_rx()` in `_configure_hackrf()`. This is a known workaround from the libhackrf issue tracker (confirmed by upstream reporters).
-- Debounce parameter changes: if multiple parameters are changed within a 500 ms window (e.g., via a Redis command batch), coalesce them into a single reconfiguration rather than cycling stop/start once per parameter.
-- After `start_rx()`, verify the callback fires within 1 second (watchdog timer); if not, attempt one recovery cycle.
+**How to avoid:**
+- Dry-run mode must explicitly NOT consume the auth token. This must be documented as a design decision, not left implicit.
+- Provide a separate `validate_tx(freq_hz, iq_bytes, txvga_gain)` method that checks all guard conditions except the token (which is a one-time resource). The caller checks `validate_tx()` first (idempotent, repeatable), then calls `start_tx()` with the token.
+- Document clearly: `validate_tx()` cannot detect an expired or absent token; it only checks frequency bands, antenna confirmation, and IQ data shape.
+- Add a test that calls `validate_tx()` then `start_tx()` and verifies the token is consumed exactly once.
 
-**Detection:**
-- `is_hackrf_streaming` is True but `current_samples_buffer` size is not growing.
-- RX LED status on the device appears correct but no data flows.
-- Only manifests after a parameter change triggers `_configure_hackrf()`.
+**Warning signs:**
+- Test suite calls `start_tx()` in dry-run mode and the auth token is missing after the test run.
+- Integration test for live TX fails with `TXNotAuthorizedError` even though a token was set (it was consumed by a prior dry-run).
 
-**Phase:** RX pipeline robustness phase. Fix before adding Redis or serial layers.
-
----
-
-## Minor Pitfalls
+**Phase to address:** TX dry-run / hardening phase.
 
 ---
 
-### Pitfall 11: IQ Data Format Undocumented — Redis Consumers Will Misinterpret
+### Pitfall 11: Input Validation in `hackrf_driver` Rejects Values That the Existing ROS2 Parameter Range Already Accepts
 
-**What goes wrong:** The current code publishes interleaved float32 I/Q with no metadata about format, sample rate, or center frequency in the same message. Redis consumers that receive the IQ stream have no way to know whether samples are float32, float16, int8, or complex64, or what the current tuning is without reading a separate state key.
+**What goes wrong:**
+`PARAM_RANGES` in `hackrf_driver/config.py` defines hardware-level bounds for `center_frequency`, `sample_rate`, `lna_gain`, `vga_gain`. The BridgeNode forwards ROS2 parameter changes to the driver via Redis commands. If v2.0 tightens the validation in `hackrf_driver` (e.g., quantizing LNA gain to 8 dB steps), a ROS2 parameter set for `lna_gain=18` will be silently rejected by the driver (18 is not a multiple of 8) while the ROS2 parameter store reports success.
 
-**Prevention:**
-- Publish IQ chunks to Redis with a header field in the stream entry: `XADD iq_stream * format int8_iq center_freq 2447000000 sample_rate 8000000 chunk <bytes>`.
-- Alternatively, publish device state to a separate Redis hash that consumers can read once on connection.
-- Document the format in code comments and in a Redis key `hackrf:iq:format` that describes the schema.
+The discrepancy: ROS2 parameter callback returns `SetParametersResult(successful=True)` (legacy `hackrf_ros/hackrf_node.py` validation only checks the old range, not the new quantization). The driver silently ignores the value. `hackrf:state` shows `lna_gain: 16` while the ROS2 parameter store shows `lna_gain: 18`. Users see a state divergence with no error.
 
-**Phase:** Redis IQ publishing phase.
+**Why it happens:**
+Validation is added at the driver level (correct architecture) but the ROS2 bridge is not updated to reflect the new constraints. The two validation layers go out of sync.
 
----
+**How to avoid:**
+- Validation must live in ONE place: `hackrf_driver/config.py` PARAM_RANGES. The BridgeNode forwards values to the driver without pre-validation. The driver rejects and logs. The Redis state reflects the driver's actual accepted value.
+- After any `set_param` command, the driver publishes the accepted value back to `hackrf:state`. The BridgeNode reads the state and publishes it to `/hackrf/state`. The ROS2 node can read the actual applied value from the state topic.
+- Remove duplicate validation from `hackrf_ros/hackrf_node.py` (or update it to match exactly) to avoid divergence.
+- For quantization (LNA gain steps): log the quantized value at INFO level: "lna_gain 18 quantized to 16 (nearest valid step)".
 
-### Pitfall 12: TX VGA Gain Quantization Silently Accepts Invalid Values
+**Warning signs:**
+- `hackrf:state.lna_gain` differs from the ROS2 parameter `lna_gain` after a parameter set.
+- No error is logged but the device is not at the requested gain.
 
-**What goes wrong:** HackRF TX VGA gain is valid in 1 dB steps from 0–47 dB. LNA TX gain has only two values: 0 dB and 14 dB. If the driver accepts arbitrary gain values and passes them directly to libhackrf, the hardware silently rounds to the nearest valid step. A TX command requesting 15 dB LNA gain will transmit at 14 dB with no error — the authorization system logs a different power level than actually transmitted.
-
-**Prevention:**
-- Validate and quantize all gain values before applying them. Round to the nearest valid step and log the actual value applied, not the requested value.
-- For the authorization audit log, record the quantized (actual) value, not the requested value.
-
-**Phase:** TX capability phase.
-
----
-
-### Pitfall 13: Redis Command Interface Has No Authentication — Accepts Commands from Any Host
-
-**What goes wrong:** Redis on the host (default configuration) has no authentication. Any process on the host network can publish to the `hackrf:commands` stream and trigger frequency changes, gain changes, or TX authorization. In a shared lab or CI environment, this is an unintended control surface.
-
-**Prevention:**
-- Configure Redis with `requirepass` or use Redis ACLs to restrict write access to the command stream.
-- The ROS node should verify that commands carry a shared secret token field before acting on them.
-- Document the security model explicitly: this driver is designed for a trusted local environment, not network-exposed deployment.
-
-**Phase:** Redis command interface phase. At minimum, document the assumption; implement token validation if the deployment environment is not fully trusted.
+**Phase to address:** Input validation phase (first v2.0 phase).
 
 ---
 
-### Pitfall 14: `interleaved_iq_data.tolist()` Is Extremely Slow for Large Buffers
+### Pitfall 12: IQ Sequence Numbers Overflow Python `int` and Are Serialized as Strings Into Redis — Consumer Comparison Breaks
 
-**What goes wrong:** The current code calls `interleaved_iq_data.tolist()` to populate the `Float32MultiArray.data` field. For 8192 IQ pairs, this creates a Python list of 16,384 float objects. `tolist()` is O(n) and allocates a new Python object per element — at 200 Hz publish rate this means over 3 million float object allocations per second.
+**What goes wrong:**
+If IQ sequence numbers are added as a monotonic counter (e.g., `_iq_seq_num` incremented per `_xadd_iq` call), at 8 MSPS with 2048-sample chunks there are approximately 3900 chunks/second. A `uint64` wraps at 2^64 ≈ 1.8 × 10^19. Even `int32` wraps in about 6 hours at this rate (~2^31 / 3900 ≈ 600,000 seconds — actually fine for int32 at this chunk rate). But if the counter is serialized to Redis as a string via `str(v)` (as `publish_state` does with all values: `{k: str(v) for k, v in state.items()}`), Redis consumers that receive the sequence number as a string must do `int(seq_num_str)` before comparison.
 
-**Prevention:**
-- Use `msg.data = interleaved_iq_data.tobytes()` with a custom message type, or assign the numpy array directly if the ROS message type supports it.
-- Alternatively, for Redis publishing, write raw bytes directly (`int8` from the HackRF with no conversion) — this eliminates all float conversion overhead in the hot path.
+If consumers naively compare sequence number strings lexicographically (`"9" > "10"` is True in string comparison), they will incorrectly detect gaps where none exist or miss actual gaps.
 
-**Phase:** RX pipeline robustness phase (performance hardening).
+This is not a Python overflow issue (Python ints are arbitrary precision) — it is a serialization contract issue that breaks consumers who do string comparisons.
+
+**How to avoid:**
+- Document the sequence number type in `hackrf:iq:format` Redis key: `seq_num_type: uint64_as_string`.
+- Sequence numbers included in IQ stream entries as a field (`XADD hackrf:iq:stream * data <bytes> seq <n>`), not only in `hackrf:state`. This allows stream consumers to use Redis entry IDs for ordering (which are already monotonic) rather than a separate counter.
+- If consumers are external Python scripts, provide a reference consumer example that does `int(fields[b'seq'])` before comparison.
+- Test with sequences that cross the 10^6, 10^7 and 10^9 boundaries to verify string-vs-integer comparison is not used anywhere.
+
+**Warning signs:**
+- Consumer logs show "gap detected" at sequence 9999 → 10000 (string comparison: "9999" > "10000" is True lexicographically).
+- Sequence number in `hackrf:state` is read back as a string by the consumer and compared directly.
+
+**Phase to address:** IQ sequence number phase.
 
 ---
 
-## Phase-Specific Warnings
+## Technical Debt Patterns
 
-| Phase Topic | Likely Pitfall | Mitigation |
-|-------------|---------------|------------|
-| RX pipeline robustness | Pitfall 1 (stop_rx deadlock), Pitfall 10 (rapid cycle corruption), Pitfall 6 (GIL contention), Pitfall 14 (tolist overhead) | Fix stop_rx threading before any other integration; replace np.append and tolist in callback |
-| Redis IQ publishing | Pitfall 2 (unbounded buffer), Pitfall 8 (stream memory growth), Pitfall 11 (format documentation) | Design with MAXLEN and backpressure queue from day one |
-| Redis command interface | Pitfall 13 (no auth) | Document security model; add token validation if needed |
-| Serial Mayhem control | Pitfall 4 (mode conflict), Pitfall 7 (device path instability), Pitfall 9 (response parsing) | Resolve mode architecture question first; use by-id paths; implement proper shell reader |
-| TX capability | Pitfall 3 (no antenna hardware damage), Pitfall 5 (protected frequencies), Pitfall 12 (gain quantization) | Antenna confirmation in auth flow; frequency allowlist; quantize and log actual gains |
-| TX authorization guardrails | Pitfall 5 (frequency), Pitfall 3 (antenna), Pitfall 13 (Redis command injection) | Allowlist + antenna confirmation + command authentication are all required together |
+Shortcuts that seem reasonable but create long-term problems.
+
+| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
+|----------|-------------------|----------------|-----------------|
+| Add FFT inline in `_drain_iq_queue` loop | One-file change, simple | Saturates bridge thread, causes IQ drops | Never — dedicated thread is required |
+| Write disk I/O in `_xadd_iq` path | No new thread needed | Blocks Redis bridge on fsync, silent data loss on Jetson SD | Never for recording; OK for small metadata writes |
+| Publish metrics on every XADD | Simplest metering | 1000 HSET/s, 30% CPU waste on metrics alone | Never — throttle to ≤5 Hz |
+| Use `threading.Timer` for sub-100ms hop intervals | No scheduler library needed | ±50ms OS jitter makes precise hopping impossible | Only for hop intervals >500 ms |
+| Share the same Redis connection for IQ stream + DLQ + metrics | Fewer objects | Single connection failure kills all three paths | Never — use separate connections for IQ stream vs. control plane |
+| `asyncio.run()` inside pymayhem async methods | Simplest async wrapper | `RuntimeError` when called from existing event loop | Never in library code |
+| Skip `validate_tx()` and go straight to `start_tx()` in tests | Faster test setup | Consumes auth token, subsequent tests fail | Only if test explicitly provisions a fresh token per test |
+
+---
+
+## Integration Gotchas
+
+Common mistakes when connecting to external services or crossing subsystem boundaries.
+
+| Integration | Common Mistake | Correct Approach |
+|-------------|----------------|------------------|
+| pymayhem domain methods → custom exceptions | Assume `except Exception` in dispatch table catches everything correctly | Catch specific pymayhem exceptions, map to Redis error state, continue dispatch |
+| BridgeNode pubsub → Redis reconnect | `except Exception: break` exits the loop permanently | Retry loop with exponential backoff; resubscribe after reconnect; flush state |
+| Hop scheduler → TXController | Call `_set_center_frequency()` without checking `_is_transmitting` | Gate all hops on `not _tx_controller._is_transmitting` before scheduling |
+| SigMF recorder → Redis bridge thread | Write to file in `_xadd_iq()` | Dedicated recorder thread with its own bounded queue |
+| Spectrum analysis → IQ pipeline | Compute FFT in `_drain_iq_queue` | Separate spectrum thread consuming from `spectrum_queue` |
+| Observability → Redis | HSET on every XADD | In-memory counters, flush at ≤5 Hz via pipeline |
+| Async pymayhem → existing event loop | `asyncio.run()` inside library | `asyncio.to_thread()` wrapper, caller provides event loop |
+| Input validation → dual codebases | Validate in both BridgeNode and hackrf_driver | Single source of truth in hackrf_driver; BridgeNode passes through without pre-validation |
+
+---
+
+## Performance Traps
+
+Patterns that work in development but fail on the Jetson ARM64 target.
+
+| Trap | Symptoms | Prevention | When It Breaks |
+|------|----------|------------|----------------|
+| FFT inline in IQ bridge thread | CPU 90%, IQ drops spike | Dedicated spectrum thread, throttle to ≤50 Hz | Immediately at 8 MSPS on Cortex-A57 |
+| File I/O in IQ bridge thread | Silent data gaps in SigMF recording | Dedicated recorder thread | On SD card, first fsync >50 ms |
+| Metric HSET on every XADD | Redis CPU 30%, bridge latency up | Throttle to 5 Hz, use pipeline | At 3900 chunks/s (constant) |
+| `threading.Timer` for <100 ms hops | Hops arrive late, schedule drifts | Warn and reduce hop rate; use `perf_counter` for drift measurement | Immediately on any loaded Linux system |
+| Waterfall computation per-chunk | 3–5x FFT cost, CPU fully saturated | Downsample to ≤50 Hz waterfall rate | At 8 MSPS on Jetson (constant) |
+| `np.tolist()` for Redis IQ publish | GC pressure from millions of Python float objects | Write raw bytes directly | Above 1 MSPS (confirmed from prior pitfalls research) |
+| Shared Redis connection for IQ + control | Single connection failure silences all paths | Separate connections for IQ stream vs. control/state | On any Redis restart |
+
+---
+
+## Security Mistakes
+
+Domain-specific security issues for v2.0 features.
+
+| Mistake | Risk | Prevention |
+|---------|------|------------|
+| DLQ readable by any Redis consumer | Sensitive command parameters (auth tokens, TX frequencies) exposed in DLQ | Strip auth tokens from DLQ entries before XADD |
+| Dry-run mode exposes frequency filter bypass | Attacker sends dry-run to probe which frequencies are blocked | Dry-run uses same frequency filter as live TX — no bypass |
+| Observability metrics reveal TX patterns | TX timing and frequency in metrics stream visible to any Redis reader | Document that Redis is a trusted local interface; do not publish raw TX frequencies in public-accessible metrics |
+| Async API accepts arbitrary serial commands | `AsyncMayhemClient._send_command()` can inject arbitrary ChibiOS shell commands | `UnsafeMayhemClient` already isolates raw commands; async API exposes only domain methods, same as sync |
+
+---
+
+## "Looks Done But Isn't" Checklist
+
+Things that appear complete but are missing critical pieces.
+
+- [ ] **Custom exceptions:** Exception types defined and raised in domain methods — but verify `_dispatch_command` catches them and publishes error to Redis (not just logs).
+- [ ] **Watchdog:** Thread starts and logs "device healthy" — but verify it uses `_device_lock.acquire(timeout=0.5)`, not a blocking acquire.
+- [ ] **SigMF recording:** Files are written to disk — but verify on Jetson SD card with `_redis_queue` saturation test running concurrently.
+- [ ] **Spectral analysis:** FFT values appear in Redis — but verify `spectrum_queue` is a separate queue and that disabling spectral analysis does not affect IQ throughput.
+- [ ] **Frequency hopping:** Hops fire at the correct frequency — but verify `_is_transmitting` guard prevents hops during active TX.
+- [ ] **Async pymayhem:** `AsyncMayhemClient` works in a standalone `asyncio.run()` script — but verify it also works from within an existing event loop without `RuntimeError`.
+- [ ] **DLQ:** Dead-letter entries appear in `hackrf:cmd:dead` — but verify `XLEN hackrf:cmd:dead` is bounded by MAXLEN and that auth tokens are stripped.
+- [ ] **Observability:** Metrics appear in Redis — but verify metric publish rate is ≤5 Hz and bridge thread CPU is not affected.
+- [ ] **Redis reconnection:** BridgeNode reconnects after `redis-cli SHUTDOWN` — but verify `/hackrf/state` is published with current state immediately after reconnect.
+- [ ] **Input validation:** Invalid gain is rejected — but verify `hackrf:state` shows the accepted (possibly quantized) value, not the rejected requested value.
+
+---
+
+## Recovery Strategies
+
+When pitfalls occur despite prevention, how to recover.
+
+| Pitfall | Recovery Cost | Recovery Steps |
+|---------|---------------|----------------|
+| Custom exception breaks existing caller | LOW | Add `except MayhemCommandError as e: return False` at dispatch boundary; deploy; restore bool contract |
+| Watchdog deadlock | HIGH | Process restart required; add `acquire(timeout=0.5)` in watchdog; redeploy |
+| SigMF data gaps on SD card | MEDIUM | Re-record; add recorder thread; pre-allocate file with `fallocate`; re-run |
+| FFT saturates bridge thread, IQ drops | MEDIUM | Disable spectral analysis via config flag; move FFT to dedicated thread; re-enable |
+| Hop+TX deadlock | HIGH | Process restart; add `_is_transmitting` guard before any hop; add lock ordering doc |
+| Async API `RuntimeError` in existing event loop | LOW | Replace `asyncio.run()` with `asyncio.to_thread()` in library; no caller changes needed |
+| BridgeNode silent after Redis restart | MEDIUM | Restart BridgeNode; then add reconnect retry loop in bridge thread |
+| DLQ unbounded growth | LOW | `redis-cli XTRIM hackrf:cmd:dead MAXLEN 500`; add MAXLEN to XADD call |
+| Metric HSET saturates Redis | LOW | Disable metric publish temporarily; add throttle; re-enable |
+
+---
+
+## Pitfall-to-Phase Mapping
+
+How roadmap phases should address these pitfalls.
+
+| Pitfall | Prevention Phase | Verification |
+|---------|------------------|--------------|
+| Custom exceptions break callers (Pitfall 1) | Phase: Custom exceptions + input validation | Run existing tests against new exceptions; verify `_dispatch_command` maps to Redis error |
+| Watchdog deadlock with `_device_lock` (Pitfall 2) | Phase: Device health watchdog | Stress test: rapid reconfiguration + watchdog running simultaneously; verify <500 ms lock wait |
+| IQ recording blocks bridge thread (Pitfall 3) | Phase: IQ recording (SigMF) | Test on Jetson SD card with concurrent disk pressure; verify queue sizes stay bounded |
+| FFT saturates bridge thread (Pitfall 4) | Phase: Spectral analysis | CPU usage ≤30% with spectral analysis enabled at 8 MSPS; IQ drop count unchanged |
+| Hop + TX deadlock (Pitfall 5) | Phase: Frequency hopping | TX active + hop scheduled simultaneously; verify hop deferred, not deadlocked |
+| Async API event loop conflict (Pitfall 6) | Phase: pymayhem async API | Test from existing event loop context; verify no `RuntimeError` |
+| BridgeNode silent after Redis disconnect (Pitfall 7) | Phase: Redis reconnection | Kill Redis, wait 30 s, restart Redis; verify BridgeNode resumes publishing without restart |
+| Metrics overhead (Pitfall 8) | Phase: Observability metrics | Enable metrics; measure bridge thread CPU; confirm ≤5 Hz publish rate |
+| DLQ unbounded growth (Pitfall 9) | Phase: Dead-letter queue | Send 1000 bad commands; verify `XLEN hackrf:cmd:dead` ≤ 500 |
+| Dry-run consumes auth token (Pitfall 10) | Phase: TX dry-run validation | Call `validate_tx()` then `start_tx()`; verify token consumed exactly once |
+| Dual-layer validation divergence (Pitfall 11) | Phase: Input validation | Set `lna_gain=18` via ROS2; verify `hackrf:state.lna_gain = 16` and no silent accept |
+| Sequence number string comparison (Pitfall 12) | Phase: IQ sequence numbers | Consumer script reads sequence numbers as strings; verify gap detection uses `int()` |
 
 ---
 
 ## Sources
 
-- [libhackrf Issue #1570: Deadlock in hackrf_stop_rx](https://github.com/greatscottgadgets/hackrf/issues/1570) — MEDIUM confidence (closed, Python-specific, maintainers redirected but issue is real)
-- [libhackrf Issue #916: Repeated Start/Stop RX Produces Error](https://github.com/greatscottgadgets/hackrf/issues/916) — MEDIUM confidence
-- [libhackrf Issue #1075: Possible data race without locking](https://github.com/greatscottgadgets/hackrf/issues/1075) — MEDIUM confidence
-- [Mayhem Firmware Wiki: USB Serial Console](https://github.com/portapack-mayhem/mayhem-firmware/wiki/USB-Serial-Console) — HIGH confidence (official documentation)
-- [HackRF Documentation: HackRF One](https://hackrf.readthedocs.io/en/latest/hackrf_one.html) — HIGH confidence (official)
-- [How Not to Break Your SDR Hardware](https://www.onesdr.com/2020/01/29/how-not-to-break-your-software-defined-radio-hardware/) — MEDIUM confidence (community, consistent with official specs)
-- [Redis XADD Documentation: MAXLEN trimming](https://redis.io/docs/latest/commands/xadd/) — HIGH confidence (official Redis docs)
-- [rclpy Issue #1025: GIL in MultiThreadedExecutor](https://github.com/ros2/rclpy/issues/1025) — HIGH confidence (official ROS2 issue tracker)
-- [rclpy Issue #1452: MultiThreadedExecutor performance](https://github.com/ros2/rclpy/issues/1452) — HIGH confidence (official ROS2 issue tracker)
-- [pyhackrf2 GitHub](https://github.com/eizemazal/pyhackrf2) — MEDIUM confidence (thin documentation, behavior inferred from libhackrf)
-- [Docker serial device path instability](https://forums.docker.com/t/exposed-usb-serial-device-dev-ttyacm0-in-container-only-sometimes-accessible/126309) — MEDIUM confidence (community forum, consistent with known Linux behavior)
+- Direct codebase inspection: `hackrf_driver/driver.py`, `hackrf_driver/redis_bridge.py`, `hackrf_driver/tx_controller.py`, `pymayhem/_serial.py`, `hackrf_ros/bridge_node.py` (all inspected 2026-03-30)
+- [Python asyncio development guide — thread safety](https://docs.python.org/3/library/asyncio-dev.html) — HIGH confidence (official Python docs)
+- [Python asyncio: running blocking I/O in executor](https://docs.python.org/3/library/asyncio-eventloop.html) — HIGH confidence (official Python docs)
+- [Python threading.Timer precision and OS scheduling jitter](https://bugs.python.org/issue41299) — MEDIUM confidence (Python issue tracker, documented jitter >10 ms)
+- [Redis fast data ingest pipeline with Streams](https://redis.io/tutorials/fast-data-ingest-pipeline-with-redis/) — HIGH confidence (official Redis docs)
+- [Redis dead letter queue with Streams — MAXLEN and retention](https://oneuptime.com/blog/post/2026-01-21-redis-dead-letter-queue/view) — MEDIUM confidence (community blog, consistent with official Redis docs)
+- [Redis latency causes and prevention](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/latency/) — HIGH confidence (official Redis docs)
+- [numpy thread safety documentation](https://numpy.org/doc/stable/reference/thread_safety.html) — HIGH confidence (official numpy docs)
+- [SigMF specification and file format](https://github.com/sigmf/SigMF) — HIGH confidence (official SigMF repo)
+- [pyhackrf2 GitHub — thin documentation, behavior inferred from libhackrf](https://github.com/eizemazal/pyhackrf2) — MEDIUM confidence
+- [PySDR IQ Files and SigMF](https://pysdr.org/content/iq_files.html) — MEDIUM confidence (community reference, consistent with SigMF spec)
+- libhackrf issue #916: rapid stop/start RX state corruption — MEDIUM confidence (confirmed in prior pitfalls research, still applies to v2.0 watchdog design)
+- `.planning/research/PITFALLS.md` (v1.0 pitfalls from prior milestone) — HIGH confidence (previously researched and verified)
+
+---
+*Pitfalls research for: HackRF ROS2 Driver v2.0 — hardening, observability, and signal capabilities added to existing three-package system*
+*Researched: 2026-03-30*

@@ -1,19 +1,17 @@
 # Project Research Summary
 
-**Project:** HackRF ROS2 Driver — Redis + Serial + TX Milestone
-**Domain:** Embedded SDR driver with Redis streaming, Mayhem serial control, and safe TX
-**Researched:** 2026-03-29
-**Confidence:** HIGH (stack and architecture from official sources; pitfalls validated against upstream issue trackers)
-
----
+**Project:** HackRF ROS2 Driver — v2.0 Hardening, Observability & Signal Capabilities
+**Domain:** SDR hardware driver with ROS2 bridge and Redis data plane
+**Researched:** 2026-03-30
+**Confidence:** HIGH
 
 ## Executive Summary
 
-This project extends a working HackRF One ROS2 prototype into a production-grade driver with three new subsystems: a Redis streaming bridge for IQ data and device state, a serial interface to the Portapack Mayhem firmware for app control, and a TX capability gated behind explicit authorization guardrails. The recommended approach is an incremental, dependency-ordered build starting with correctness fixes to the existing RX pipeline, then layering each new subsystem on stable foundations. The architecture is a single ROS2 node (`HackRFNode`) that owns all hardware state, with Redis, serial, and TX logic isolated in dedicated helper classes and a background thread — no additional ROS2 nodes are needed for the new subsystems.
+The v2.0 milestone extends a fully functional v1.x driver (three-package architecture: pymayhem, hackrf_driver, hackrf_ros) with production hardening and signal capabilities. The existing system streams IQ data via pyhackrf2 to Redis and ROS2, controls Mayhem serial interface via pyserial, and gates TX behind a four-guard authorization system. It is operationally functional but not production-ready: errors are swallowed silently, the Redis bridge dies permanently on disconnect, the IQ stream has no gap detection, and there is no operator health visibility. v2.0 addresses all of this.
 
-The most important architectural insight from combined research is that the current prototype has two latent bugs that will corrupt all downstream work if not fixed first: the shared `current_samples_buffer` numpy array has no thread lock between the pyhackrf2 USB callback and the ROS2 timer, and the `_configure_hackrf()` function calls `stop_rx()` with no timeout or thread guard, creating a known deadlock path. Both must be resolved before any Redis or serial code is written. The replacement is a `queue.Queue`-based producer/consumer split, which is thread-safe by design and correctly separates the USB interrupt thread from the ROS2 executor thread.
+The recommended approach is strictly additive: no architectural changes to the three-package split, no asyncio migration of the core driver, no new infrastructure dependencies. New features tap into existing queue and threading patterns — dedicated daemon threads with bounded queues for recording and spectral analysis — extend the existing Redis namespace (hackrf:metrics, hackrf:spectrum, hackrf:cmd:dlq), and harden existing call sites with typed exceptions, input validation, and reconnect retry loops. The only new PyPI dependency that is truly required is `sigmf>=1.7.2` for standards-compliant IQ recording; scipy is optional, and all other features use stdlib or already-present packages.
 
-The primary risk in this milestone is hardware safety: transmitting without an antenna physically destroys the HackRF's front-end amplifier (no repair path), and transmitting on protected frequencies carries legal liability. The TX authorization design must enforce a frequency allowlist and explicit antenna confirmation — these are not optional polish items. A secondary risk is the unresolved question of whether pyhackrf2 IQ streaming (HackRF USB bulk mode) and Mayhem serial console (`/dev/ttyACM1`) can operate simultaneously or require a mode switch; this must be tested empirically before either integration is written.
+The primary risks are threading-related: the watchdog, hop scheduler, IQ recorder, and spectrum analyzer all add concurrent paths to a driver whose existing lock protocol was designed for two threads. Every new daemon thread must be designed with explicit lock acquisition rules before a line of code is written. The Pitfalls research identified six critical failure modes — all deadlock or silent-data-loss class — that must be addressed in phase design, not during implementation.
 
 ---
 
@@ -21,162 +19,171 @@ The primary risk in this milestone is hardware safety: transmitting without an a
 
 ### Recommended Stack
 
-The new dependencies are minimal and well-chosen. `redis-py >= 7.4.0` with `hiredis >= 3.3.1` provides the Redis interface: v7 is the active series, hiredis auto-accelerates response parsing with no code changes, and the asyncio variant (`aioredis`) is obsolete and merged. `pyserial >= 3.5` (the only stable release) handles serial communication with the Mayhem console over `/dev/ttyACM1`; pyserial-asyncio is inappropriate because this driver uses threads, not an asyncio event loop. All three packages are compatible with the Python 3.10 environment shipped by ROS2 Humble.
+The v1.x stack (redis-py 7.4+, hiredis, pyserial, pyhackrf2, numpy, rclpy) is validated and unchanged. v2.0 adds exactly three new PyPI packages across the full system:
 
-The Redis data model uses Streams (`XADD`) for IQ data and commands, and a Hash (`HSET`) for device state. This is the correct choice: Pub/Sub drops messages on slow or disconnected consumers (unacceptable for IQ data), while Streams provide ring-buffer semantics with MAXLEN trimming. The TX authorization pattern uses a time-bounded Redis token with atomic `GETDEL` — no persistent "armed" state and no session model.
+- `sigmf>=1.7.2` — SigMF-format IQ recording; the only correct Python implementation; depends only on numpy (already present). Hard dependency for IQ recording feature.
+- `scipy>=1.11,<1.16` — Welch PSD and spectrogram; constrained to <1.16 because scipy 1.16+ requires Python 3.11 while ROS2 Humble ships Python 3.10. Optional extra (`hackrf_driver[spectral]`).
+- `pyserial-asyncio-fast>=0.16` — asyncio serial transport for pymayhem async API. Optional extra (`pymayhem[async]`). Deferred to v3.0+.
+
+All observability (metrics, DLQ, watchdog) uses existing redis-py and stdlib threading. No Prometheus, no statsd, no external monitoring infrastructure.
 
 **Core technologies:**
-- `redis-py 7.4.0` + `hiredis 3.3.1`: Redis client for IQ streaming and control — v7 is active series, hiredis is zero-config performance boost
-- `pyserial 3.5`: Serial communication with Mayhem console — synchronous, daemon-thread model, no asyncio needed
-- `queue.Queue` (stdlib): Thread-safe handoff between pyhackrf2 USB callback and ROS2/Redis threads — replaces unsafe numpy buffer
-- `MultiThreadedExecutor` (rclpy): Two callback groups (device + service) enabling service calls to overlap IQ publication
+- `sigmf 1.7.2`: IQ recording to open standard — enables replay in GNU Radio, IQEngine, inspectrum with no sidecar README
+- `numpy.fft` (base) / `scipy 1.15.x` (optional): Headless spectral analysis — numpy is sufficient for single-shot FFT; scipy adds Welch averaging only if needed
+- Redis HSET pattern: Observability metrics — same pattern as existing `hackrf:state`; zero new dependencies
+- stdlib `threading.Thread` + `threading.Event`: Watchdog, recorder thread, spectrum thread — no new concurrency libraries needed
 
 ### Expected Features
 
-See `.planning/research/FEATURES.md` for full table with complexity and dependency details.
+**Must have — v2.0 Core Hardening (P1, ship first):**
+- Custom exception hierarchy (pymayhem: MayhemError tree; hackrf_driver: HackRFError tree) — callers cannot distinguish error types today
+- Input validation in every public method entry point with `HackRFConfigError` on rejection — silent bad-param hardware corruption today
+- Device health watchdog — USB stall detection with automatic reconnect
+- IQ sequence numbers on every XADD entry — consumers detect dropped buffers
+- Redis reconnection in BridgeNode — Redis restart currently kills the bridge permanently
+- Observability metrics hash (`hackrf:metrics`) — operators have zero health visibility today
+- Dead-letter queue (`hackrf:cmd:dlq`) — failed commands silently discarded today
+- TX dry-run validation via non-consuming `validate_tx()` — safe pre-flight without RF emission
+- Antenna confirmation ROS2 service — BridgeNode exposes TX gate to ROS2 orchestrators
 
-**Must have (table stakes):**
-- Thread-safe IQ buffer (replace `np.append` + unprotected list with `queue.Queue`) — existing code has a live race condition
-- Error recovery and USB reconnection with backoff — single USB hiccup currently kills the session permanently
-- Parameter validation with explicit hardware ranges (freq: 1 MHz–6 GHz, LNA: 0–40 dB, VGA: 0–62 dB)
-- Class naming fix (`HackRFPuiblisherNode` → `HackRFPublisherNode`) and structured logging (no bare `print`)
-- Redis IQ stream publish (`XADD hackrf:iq:stream` with MAXLEN) — primary external data interface
-- Redis device state hash (`HSET hackrf:state`) — consumers need queryable current config
-- Redis command interface (`SUBSCRIBE hackrf:cmd`) — closes the external control loop
-- Serial port lifecycle (open at startup, close at shutdown) with Mayhem `applist`/`appstart`/`setfreq`/`radioinfo`
-- TX authorization gate (one token per transmission, frequency allowlist, antenna confirmation)
-- TX stop on node shutdown (calling `stop_tx()` in `destroy_node()` is an RF safety requirement)
+**Should have — v2.0 Signal Capabilities (P2, ship after P1 stable):**
+- IQ recording to SigMF (trigger-based, dedicated recorder thread)
+- Raw IQ fallback recording (no sigmf dependency path)
+- Headless FFT/PSD to Redis stream (`hackrf:spectrum`) + `/hackrf/spectrum` ROS2 topic
+- Waterfall history in Redis list (`hackrf:waterfall`, rolling 200-row window)
+- Frequency hopping scheduler with Redis command interface
+- Legacy HackRFNode documentation and deprecation notice
 
-**Should have (differentiators):**
-- Redis Streams over Pub/Sub for IQ (persistent window for late-joining consumers)
-- `setfreq` via serial for in-app frequency updates (faster than stop/reconfigure/restart)
-- `radioinfo` query to verify config round-trip after `setfreq`
-- TX via pyhackrf2 `start_tx()` for custom IQ waveform transmission
-- `gotgps` serial injection for mobile/APRS use cases
-
-**Defer to v2+:**
-- Mayhem POCSAG TX via `sendpocsag` — requires careful testing; establish TX baseline first
-- Mayhem file replay (SD card staging + `appstart Replay`) — high complexity, low frequency of use
-- ROS2 Lifecycle Node migration — correct long-term architecture but is a full node rewrite; plan as dedicated milestone
-- Mayhem screenshot bridge to ROS2 Image topic — niche, low value for current use case
+**Defer to v3.0+:**
+- pymayhem async API (asyncio) — high complexity, event loop ownership unresolved in ROS2 context
+- ROS2 Lifecycle Node migration — correct long-term architecture but full rewrite scope
 
 **Anti-features (do not build):**
-- Persistent TX authorization session (creates an always-armed transmitter window)
-- Automatic frequency hopping (conflicts with Mayhem app state)
-- Signal demodulation (driver layer ends at IQ delivery)
-- Web UI / dashboard (Redis consumers build their own)
+- Persistent always-on disk recording (160 MB/s fills disk in minutes)
+- Automatic demodulation (belongs in consumer layer)
+- Web UI for waterfall (explicitly excluded from scope)
+- asyncio port of hackrf_driver core (libusb callbacks are not async-safe)
+- Frequency hopping during active TX (half-duplex hardware constraint)
 
 ### Architecture Approach
 
-The architecture is a single `HackRFNode` owning all hardware, with three helper classes — `MayhemSerial`, `RedisBridge`, and `TXController` — operating in dedicated daemon threads. A `MultiThreadedExecutor` with two `MutuallyExclusive` callback groups handles the ROS2 side. IQ data flows from the pyhackrf2 USB callback into two separate `queue.Queue` instances (one for ROS2 publication, one for Redis), preventing either consumer from stalling the other. Redis writes happen exclusively in the Redis bridge thread; the ROS2 executor never touches the Redis client. All device reconfiguration is protected by a single `_device_lock (RLock)`, serial writes by `_serial_lock (Lock)`, and TX state by an `RLock` in `TXController`.
+The existing three-package architecture (pymayhem → hackrf_driver → hackrf_ros) is preserved exactly. New features integrate at four well-defined tap points: (1) the `_rx_callback` path in `HackRFDriver` gets two additional `put_nowait()` calls feeding a `_record_queue` and `_fft_queue`; (2) `RedisBridge._xadd_iq()` gains a metrics accumulator and spectrum queue post; (3) `BridgeNode._bridge_loop()` gains reconnect retry logic and a second pubsub subscription for spectrum notifications; (4) `pymayhem._serial._send_command()` raises typed exceptions instead of returning booleans. The critical architectural rule: every new I/O-heavy operation (disk writes, FFT computation) runs in its own daemon thread with a bounded queue — never inline in the IQ drain loop.
 
-**Major components:**
-1. `HackRFNode` (`hackrf_node.py`) — owns all hardware state; contains pyhackrf2 client, parameter handling, and callback groups
-2. `MayhemSerial` (`mayhem_serial.py`) — line-oriented serial interface to Mayhem console; single in-flight command model with reconnect loop
-3. `RedisBridge` (`redis_bridge.py`) — daemon thread draining the redis queue, publishing IQ stream and state hash, consuming command channel
-4. `TXController` (`tx_controller.py`) — in-memory auth token model; one token per transmission; all methods protected by RLock
-5. `IQPlotterNode` (`iq_plotter_node.py`) — visualization node, unchanged
+**Major components added in v2.0:**
+1. `IQRecorder` (hackrf_driver) — daemon thread draining `_record_queue`; writes SigMF or raw binary to disk; lifecycle controlled via Redis commands
+2. `SpectrumAnalyzer` (hackrf_driver) — daemon thread draining `_fft_queue` at configurable decimation rate; publishes power spectra to `hackrf:spectrum` Redis stream
+3. `FreqHopper` (hackrf_driver) — `threading.Timer` chain calling `_set_center_frequency()` per schedule; TX-aware (checks `_is_transmitting` before each hop)
+4. `exceptions.py` modules (pymayhem + hackrf_driver) — typed exception hierarchies replacing bare `Exception` propagation
+5. Watchdog timer in `HackRFDriver` — checks `_last_rx_time` every 10s; triggers `_try_connect()` on stall via correction queue
 
-**Key patterns:**
-- Two separate queues (not a shared queue with multiple consumers) for IQ → ROS2 and IQ → Redis
-- `queue.Queue` with `maxsize=100`, drop-on-full (not block-on-full) to prevent OOM
-- `XADD key MAXLEN ~ 1000` on every Redis IQ publish to cap stream memory
-- One auth token = one TX transmission (no session model)
+**New Redis namespace:**
+- `hackrf:metrics` — Hash, updated at 1 Hz via pipeline
+- `hackrf:spectrum` — Stream, float32 PSD entries
+- `hackrf:spectrum:notify` — Pub/Sub channel (mirrors existing `hackrf:iq:notify` pattern)
+- `hackrf:cmd:dlq` — Stream, failed command entries, MAXLEN=500
 
 ### Critical Pitfalls
 
-See `.planning/research/PITFALLS.md` for full detail including detection signals and phase assignments.
+1. **Custom exceptions break existing `bool`-return callers** — pymayhem domain methods currently return `bool`; adding raised exceptions is a public API break. Fix: catch pymayhem exceptions at the `_dispatch_command` boundary in redis_bridge.py, map to structured Redis error state. Never propagate raw exceptions through the dispatch table.
 
-1. **`stop_rx()` called from inside the RX callback causes a deadlock** — The pyhackrf2 callback must only return `0` (continue) or non-zero (signal stop); use a `threading.Event` to request stop from the main thread. Add a timeout watchdog around every `stop_rx()` call. Fix this before writing any other code.
+2. **Watchdog deadlock with `_device_lock`** — the watchdog runs in a separate daemon thread; if it acquires `_device_lock` while `_configure_device()` holds it (100–300 ms), the driver deadlocks. Fix: watchdog uses lock-free health signals only (check `is_hackrf_streaming` flag and `_redis_queue.qsize()`); corrective action posts a reconnect request to a queue rather than directly calling `_try_connect()`.
 
-2. **Unbounded IQ buffer + Redis writes in the same thread = OOM** — At 8 MSPS, `np.append()` in the callback generates ~32 MB/s of float32 data; any Redis latency spike causes unbounded growth. Replace with `queue.Queue(maxsize=100)` drop-on-full and move all Redis writes to the bridge thread.
+3. **IQ recorder blocks the Redis bridge thread on fsync** — writing to disk inline in `_xadd_iq()` blocks the drain loop; on Jetson SD card, a single fsync takes 50–200 ms, which overflows the 64-entry `_redis_queue` in ~65 ms. Fix: dedicated recorder thread with its own bounded queue; SigMF metadata written only on stop, not incrementally.
 
-3. **TX without antenna physically destroys the HackRF amplifier** — There is no hardware interlock. The TX authorization flow must include an explicit antenna confirmation step, log a prominent warning on every TX authorization, and default TX VGA gain to 0 dB requiring explicit override.
+4. **FFT inline in `_drain_iq_queue` saturates CPU** — at 8 MSPS, the drain loop fires ~1000 times/second; adding numpy FFT inline increases per-iteration cost 5–10x, causing IQ drop-oldest. Fix: spectrum analysis in a dedicated thread consuming from a separate `_fft_queue` at a throttled rate (10–50 Hz), not per-chunk.
 
-4. **Mayhem serial console and pyhackrf2 IQ streaming may be mutually exclusive** — The Mayhem firmware wiki warns against entering HackRF mode while the serial console is active. Whether these two interfaces can coexist concurrently on this firmware version must be tested empirically before either integration layer is written. If they cannot coexist, the driver needs an explicit mode-switch state machine.
+5. **Frequency hopping + TX = ABBA deadlock** — hop scheduler calls `_configure_device()` (holds `_device_lock`); TX holds `_tx_lock` and waits for `_device_lock`. Fix: hop scheduler checks `_is_transmitting` before every hop; single reconfiguration queue serializes all device reconfiguration requests to prevent concurrent lock acquisition.
 
-5. **TX on protected frequencies carries legal liability** — HackRF covers 1 MHz–6 GHz with no hardware locks. The TX path must validate frequency against an allowlist (default: ISM bands only) and hard-reject transmissions on emergency, aviation, GPS, and maritime distress frequencies regardless of authorization level.
+6. **Redis reconnection in BridgeNode silently kills `/hackrf/iq`** — current `except Exception: break` exits the bridge loop permanently; ROS2 shows node alive but topic goes silent. Fix: replace `break` with exponential-backoff retry loop; resubscribe to `hackrf:iq:notify` after reconnect; flush state immediately after reconnect.
 
 ---
 
 ## Implications for Roadmap
 
-Based on the combined dependency graph from FEATURES.md, the build order from ARCHITECTURE.md, and the phase assignments from PITFALLS.md, a 4-phase structure is strongly indicated.
+A four-phase structure is indicated by the dependency graph in FEATURES.md: custom exceptions must exist before any other feature raises them; Redis reconnection must be stable before observability metrics can be reliably published; IQ sequence numbers must exist before recording or FFT can note gap events.
 
-### Phase 1: RX Pipeline Correctness
+### Phase 1: Foundation Hardening
 
-**Rationale:** All subsequent phases depend on a reliable, thread-safe IQ pipeline. The two live bugs (unsafe buffer, stop_rx deadlock risk) will manifest as intermittent crashes when Redis and serial are added. Fix these first at zero dependency cost — no new packages required.
+**Rationale:** All other v2.0 features depend on typed exceptions (to raise them) and Redis reconnection (to publish health data). These are pure-logic changes with no new dependencies, low implementation risk, and high leverage. This phase is also the most disruptive to existing API contracts (bool returns → exceptions) and must be locked before anything else touches pymayhem domain methods.
 
-**Delivers:** A production-stable RX pipeline with correct threading, parameter validation, reconnection logic, and readable logs.
+**Delivers:** Production-safe error handling; bridge that survives Redis restart; IQ gap detection; TX pre-flight validation
 
-**Addresses:** Thread-safe IQ buffer, error recovery/reconnection, parameter validation with ranges, class naming fix, structured logging, `stop_rx()` 100ms settling delay.
+**Implements:**
+- Custom exception hierarchy in pymayhem (`exceptions.py`) and hackrf_driver (`exceptions.py`)
+- Input validation with `HackRFConfigError` on out-of-range values (single source of truth in `config.py`)
+- IQ sequence numbers (`seq` field) added to every XADD entry
+- Redis reconnection retry loop in BridgeNode with exponential backoff and state flush on reconnect
+- TX dry-run via non-consuming `validate_tx()` path (does not call GETDEL on auth token)
+- Antenna confirmation ROS2 service via BridgeNode / bridge_services.py
 
-**Avoids:** Pitfall 1 (stop_rx deadlock), Pitfall 6 (GIL contention in callback), Pitfall 10 (rapid start/stop firmware corruption), Pitfall 14 (`tolist()` performance).
+**Avoids:** Pitfall 1 (exception API break at dispatch boundary), Pitfall 7 (silent bridge death on Redis disconnect), Pitfall 10 (dry-run consuming auth token), Pitfall 11 (dual validation divergence between BridgeNode and hackrf_driver), Pitfall 12 (sequence number string comparison trap)
 
-**Research flag:** Standard patterns — `queue.Queue`, ROS2 `MultiThreadedExecutor`, libhackrf threading rules are all well-documented. No phase research needed.
+**Research flag:** Standard patterns — no phase research needed. Exception hierarchies and Redis reconnection are fully specified in STACK.md and PITFALLS.md.
 
----
+### Phase 2: Observability and Reliability
 
-### Phase 2: Mayhem Serial Interface
+**Rationale:** Depends on Phase 1 (Redis reconnection must be stable before metrics publishing is reliable; exceptions must exist before watchdog can raise them). These features are cohesive: watchdog detects failures, metrics surface them, DLQ preserves the evidence.
 
-**Rationale:** Serial must be built and tested before Redis and TX, because: (a) the mode-conflict question (Pitfall 4) must be resolved empirically before any integration is written, (b) TX via Mayhem depends entirely on `MayhemSerial`, and (c) serial testing can be done with a terminal before Redis exists. This phase has an isolated test surface.
+**Delivers:** Operator health visibility via `hackrf:metrics`; automatic USB reconnect; failed command forensics in DLQ
 
-**Delivers:** A `MayhemSerial` helper class with `appstart`, `applist`, `setfreq`, `radioinfo`, and reconnect loop; serial lifecycle wired into `HackRFNode`; ROS2 service `hackrf/mayhem_cmd`; empirical answer to the mode-conflict question.
+**Implements:**
+- Device health watchdog (lock-free detection: check `is_hackrf_streaming` + `_redis_queue.qsize()`; corrective action via correction queue, not direct `_try_connect()`)
+- Observability metrics hash (`hackrf:metrics`) published at 1 Hz via Redis pipeline
+- Dead-letter queue (`hackrf:cmd:dlq` stream) with MAXLEN=500; strips auth tokens before XADD
+- Legacy HackRFNode documentation and deprecation notice pointing to hackrf_driver
 
-**Addresses:** Serial port lifecycle, `applist` query, `appstart`/`setfreq`/`radioinfo` commands.
+**Avoids:** Pitfall 2 (watchdog deadlock — lock-free detection path), Pitfall 8 (metrics at XADD rate — throttle to 1 Hz via pipeline), Pitfall 9 (unbounded DLQ — MAXLEN=500 + EXPIRE TTL)
 
-**Avoids:** Pitfall 4 (mode conflict — resolve empirically in this phase), Pitfall 7 (device path instability — use `/dev/serial/by-id/` symlinks), Pitfall 9 (response parsing — implement proper `ch>` prompt reader with per-command timeouts).
+**Research flag:** Watchdog correction queue design needs explicit specification before coding — document which thread drains the correction queue and how it avoids re-entry with `_configure_device()`.
 
-**Research flag:** The Mayhem serial protocol is documented but the concurrent-access question is not. Empirical testing is required at the start of this phase. The `MayhemSerial` class design (command/response framing) may need adjustment based on actual firmware behavior.
+### Phase 3: Signal Capabilities
 
----
+**Rationale:** Depends on Phase 1 (IQ sequence numbers for gap notation in recordings; validated parameters for recording trigger). IQ recording and spectral analysis share the dedicated-thread pattern and should be built together. Frequency hopping is a separate subsystem but shares the `_configure_device()` lock concern and belongs in the same phase.
 
-### Phase 3: Redis Bridge
+**Delivers:** SigMF-format recordings; real-time spectrum to Redis and ROS2; programmable frequency scanning
 
-**Rationale:** Redis integration depends on the Phase 1 queue refactor (needs `queue.Queue` as the handoff mechanism) but does not depend on serial. It can proceed in parallel with Phase 2 logically, but sequential execution (after Phase 2) ensures the mode-conflict answer is known before Redis command dispatch routes to `MayhemSerial`.
+**Implements:**
+- `IQRecorder` daemon thread with `_record_queue` tap in `_rx_callback`; SigMF lifecycle via Redis `record_start` / `record_stop` commands; metadata file written only on stop
+- `SpectrumAnalyzer` daemon thread with `_fft_queue` tap; numpy FFT with Hann window; publishing to `hackrf:spectrum` stream + Pub/Sub notify
+- Waterfall history in `hackrf:waterfall` Redis list (rolling 200 rows, LPUSH + LTRIM)
+- `/hackrf/spectrum` ROS2 topic via BridgeNode second pubsub subscription (mirrors existing IQ topic pattern)
+- `FreqHopper` class with TX-aware `threading.Timer` chain; Redis `hop_start` / `hop_stop` command handlers; checks `_is_transmitting` before every hop
 
-**Delivers:** `RedisBridge` daemon thread publishing IQ stream (`XADD hackrf:iq:stream MAXLEN ~ 1000`) and device state hash (`HSET hackrf:state`); Redis command subscriber dispatching `set_frequency`, `set_gain`, and (via MayhemSerial) `app_start`; configurable `redis_url`, `redis_iq_stream_key`, `redis_state_key` ROS parameters.
+**Avoids:** Pitfall 3 (recorder blocking bridge thread — dedicated recorder thread), Pitfall 4 (FFT inline CPU saturation — dedicated spectrum thread throttled to ≤50 Hz), Pitfall 5 (hop + TX deadlock — `_is_transmitting` check + single reconfiguration queue)
 
-**Uses:** `redis-py 7.4.0`, `hiredis 3.3.1`, `queue.Queue` from Phase 1 refactor.
+**Research flag:** SigMF gap entry byte offset calculation (sample_start after a sequence gap) needs concrete specification in the phase plan. Frequency hopping lock order between `_device_lock` and `_tx_lock` must be explicitly documented before code is written.
 
-**Addresses:** Redis IQ stream publish, Redis device state hash, Redis command interface, IQ data format metadata in stream fields.
+### Phase 4: pymayhem Async API (v3.0 candidate)
 
-**Avoids:** Pitfall 2 (unbounded buffer — queue is bounded and Redis bridge runs in dedicated thread), Pitfall 8 (Redis stream memory growth — MAXLEN on every XADD), Pitfall 11 (IQ format undocumented — include format/sample_rate/center_freq fields in stream entry).
+**Rationale:** Deferred from v2.0. High implementation complexity (event loop ownership, ROS2 context incompatibility), and the deployment target (ROS2 nodes with rclpy threading model) does not benefit from async pymayhem. The executor-wrapper pattern (Option A in ARCHITECTURE.md: `AsyncMayhemClient` wraps `MayhemClient` with `run_in_executor`) is the correct approach if ever built, requiring zero new dependencies. Only build if an asyncio-native consumer (FastAPI, home automation system) needs direct Mayhem control.
 
-**Research flag:** Standard patterns — Redis Streams and redis-py are well-documented. No additional research needed if team is familiar with the API.
+**Delivers:** `AsyncMayhemClient` with `await client.radio.setfreq(...)` syntax for asyncio callers; zero impact on sync `MayhemClient` or hackrf_driver
 
----
+**Avoids:** Pitfall 6 (event loop ownership — `asyncio.run()` must never appear inside library code; caller provides loop)
 
-### Phase 4: TX Authorization and Transmission
-
-**Rationale:** TX is the highest-risk phase (hardware damage + legal liability) and must be last. It requires Phase 1 (stable RX pipeline), Phase 2 (MayhemSerial for app dispatch), and Phase 3 (Redis command routing) to be solid before adding transmit paths.
-
-**Delivers:** `TXController` with in-memory auth token model (one token = one TX), frequency allowlist validation, antenna confirmation warning, TX gain quantization with audit logging, `hackrf/authorize_tx` and `hackrf/transmit` ROS2 services, `stop_tx()` in `destroy_node()`, TX state published to `/hackrf/tx_state` and `hackrf:state` Redis hash.
-
-**Addresses:** TX authorization gate, TX stop on shutdown, TX via pyhackrf2 `start_tx()`, parameter validation for TX gain values.
-
-**Avoids:** Pitfall 3 (antenna damage — prominent warning + conservative defaults), Pitfall 5 (protected frequencies — frequency allowlist hard-coded for ISM bands, hard rejections for distress/aviation/GPS), Pitfall 12 (TX gain quantization — quantize and log actual applied value).
-
-**Research flag:** The pyhackrf2 `start_tx()` API is lightly documented (medium confidence). Half-duplex mode switching behavior from RX to TX and back needs empirical validation. Recommend a brief research-phase at the start of this phase covering: `start_tx()` callback contract, half-duplex switching timing, and TX error recovery.
-
----
+**Research flag:** Needs phase research — event loop ownership contract when pymayhem is used from a ROS2 node that may use rclpy's async executor is not fully resolved. Research asyncio/ROS2 executor interaction before writing any async code.
 
 ### Phase Ordering Rationale
 
-- Phase 1 before everything: The queue refactor is a foundational prerequisite. Any code written on top of the broken buffer will need to be rewritten.
-- Phase 2 before Phase 4: `TXController` calls `MayhemSerial`; serial must exist and be tested first.
-- Phase 2 before Phase 3 (in this order): The mode-conflict question (Pitfall 4) affects what Phase 3's command dispatcher can safely route to serial. Knowing the answer first reduces rework.
-- Phase 4 last: Irreversible hardware risk and legal risk — build on the most stable foundation possible before introducing any transmit path.
+- **Exceptions before everything:** Every new feature in phases 2–4 raises `HackRFError` or `MayhemError` subtypes. The exception modules must exist first or every feature uses bare `Exception`.
+- **Reconnection before metrics:** If BridgeNode's Redis connection can die silently, metrics are unreliable. Phase 1 must fix the bridge before Phase 2 adds metrics publishing through it.
+- **Sequence numbers before recording:** SigMF recordings note gap events using sequence number discontinuities. Phase 1 sequence numbers are a prerequisite for Phase 3 recording accuracy.
+- **Watchdog before signal capabilities:** The watchdog's reconnect path is exercised heavily during frequency hopping (rapid device reconfiguration). Having the watchdog working and tested before hopping reduces Phase 3 risk.
+- **Dedicated threads as a pattern before I/O:** The architecture rule — never inline I/O in `_drain_iq_queue` — must be established as an explicit design constraint in Phase 3 before a line of recording or FFT code is written.
 
 ### Research Flags
 
-Needs phase research before implementation:
-- **Phase 2 (serial):** Concurrent pyhackrf2 + Mayhem serial access is undocumented. Empirical testing required at phase start to determine mode architecture.
-- **Phase 4 (TX):** `pyhackrf2.start_tx()` API has medium-confidence documentation. Half-duplex RX/TX switching timing needs empirical validation before writing TX controller logic.
+**Needs deeper research during planning:**
+- **Phase 2 (watchdog):** Lock acquisition order between `_device_lock`, `_tx_lock`, and watchdog correction queue must be explicitly designed. The pitfalls research identifies the deadlock risk but does not name a canonical fix — the phase plan must resolve this before implementation.
+- **Phase 3 (recorder thread):** SigMF gap handling (when to emit a new `captures` entry, how to compute `sample_start` from chunk count) needs a concrete specification in the phase plan.
+- **Phase 4 (async pymayhem):** Event loop ownership in a mixed threading/asyncio context, specifically when pymayhem is used from a ROS2 node that may or may not use rclpy's async executor, is unresolved. Phase research required.
 
-Standard patterns (skip research-phase):
-- **Phase 1 (RX correctness):** `queue.Queue` threading, libhackrf stop_rx rules, and rclpy MultiThreadedExecutor are all officially documented.
-- **Phase 3 (Redis bridge):** Redis Streams, XADD/MAXLEN, and redis-py are all thoroughly documented with official examples.
+**Standard patterns (skip research-phase):**
+- **Phase 1 (exceptions + validation):** Python exception hierarchies and input validation are stdlib patterns. Exact exception names and valid parameter ranges are fully specified in STACK.md and PITFALLS.md.
+- **Phase 1 (Redis reconnection):** Exponential backoff retry with ping-and-resubscribe is a standard Redis client pattern. ~20 lines of implementation.
+- **Phase 2 (metrics):** Redis HSET at 1 Hz via pipeline is identical to the existing `hackrf:state` pattern. No design research needed.
+- **Phase 2 (DLQ):** `XADD MAXLEN ~ 500` is the canonical Redis Streams DLQ pattern. Fully specified in FEATURES.md.
+- **Phase 3 (spectrum analyzer):** numpy FFT on complex float32 with Hann window is a solved problem. Thread architecture follows the same pattern as the existing `RedisBridge` daemon thread.
 
 ---
 
@@ -184,59 +191,42 @@ Standard patterns (skip research-phase):
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All versions verified directly from PyPI and GitHub releases on 2026-03-29 |
-| Features | MEDIUM-HIGH | Mayhem serial commands from official wiki (HIGH); pyhackrf2 TX API has thin documentation (MEDIUM) |
-| Architecture | HIGH | Codebase inspected directly; all patterns from official ROS2 and Python stdlib docs |
-| Pitfalls | HIGH | Critical pitfalls confirmed against libhackrf issue tracker, Mayhem wiki, and Redis official docs |
+| Stack | HIGH | All new packages verified on PyPI with exact versions; scipy/Python 3.10 compatibility constraint confirmed against scipy release matrix |
+| Features | HIGH | Features directly derived from identified gaps in the existing codebase; no speculative requirements; dependency graph is precise |
+| Architecture | HIGH | Based on direct codebase inspection of v1.x Phase 5 end state; integration points are concrete with specific file/method names, not design sketches |
+| Pitfalls | HIGH | All critical pitfalls identified by mechanistic inspection of existing threading model and lock protocol; deadlock scenarios are fully traced |
 
-**Overall confidence:** HIGH
+**Overall confidence: HIGH**
 
 ### Gaps to Address
 
-- **Mayhem serial + pyhackrf2 concurrent access:** The Mayhem wiki warns against this but does not document per-firmware-version behavior. Must test empirically at the start of Phase 2. If they cannot coexist, the architecture needs a mode-switch state machine (adds ~1 sprint of complexity).
-
-- **`pyhackrf2.start_tx()` callback contract:** The pyhackrf2 library has minimal documentation; TX behavior is inferred from libhackrf. Half-duplex switching timing and error recovery behavior need empirical testing at the start of Phase 4.
-
-- **TX gain quantization values:** LNA TX gain valid values (documented as 0 dB and 14 dB) should be verified against the pyhackrf2 source before implementing the quantization validator.
-
-- **Redis security model:** The Redis command interface has no authentication by default. The current design is documented as "trusted local environment only." If deployment environment changes, Redis ACL / requirepass configuration is needed.
+- **Watchdog correction queue design:** PITFALLS.md says "post to a queue rather than directly calling `_try_connect()`" but does not specify which thread drains that correction queue. The Phase 2 plan must name the thread and specify how it avoids re-entrant reconfiguration.
+- **SigMF gap entry timing:** When a sequence gap is detected mid-recording, the SigMF spec requires a new `captures` entry at the correct `sample_start` offset. The exact calculation (chunk count × chunk size) must be specified in the Phase 3 plan before the IQRecorder is implemented.
+- **Hop rate floor on Jetson:** The minimum practical hop dwell of ~100 ms is from community reports, not the official HackRF spec. If sub-100 ms hopping is required, this needs hardware validation on the target Jetson ARM64 platform.
+- **Jetson ARM64 FFT performance:** PITFALLS.md recommends `OPENBLAS_NUM_THREADS=1` to prevent OpenBLAS thread pool contention. This mitigation is not tested against actual throughput numbers. Phase 3 plan should include a performance benchmark gate before declaring spectrum analysis complete.
 
 ---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-
-- Mayhem firmware USB Serial Console wiki — confirmed serial commands, mode interaction warning
-  https://github.com/portapack-mayhem/mayhem-firmware/wiki/USB-Serial-Console
-- redis-py official docs — Streams API, ConnectionPool, thread safety
-  https://redis.readthedocs.io/en/stable/
-- Redis XADD official docs — MAXLEN trimming behavior
-  https://redis.io/docs/latest/commands/xadd/
-- ROS2 Humble callback groups — MultiThreadedExecutor design
-  https://docs.ros.org/en/humble/How-To-Guides/Using-callback-groups.html
-- Python queue module — thread-safe Queue guarantees
-  https://docs.python.org/3/library/queue.html
-- HackRF One official docs — hardware specs and limits
-  https://hackrf.readthedocs.io/en/latest/hackrf_one.html
-- rclpy issue tracker — GIL and MultiThreadedExecutor performance (issues #1025, #1452)
-  https://github.com/ros2/rclpy/issues/
+- SigMF specification v1.x (github.com/sigmf/SigMF/blob/sigmf-v1.x/sigmf-spec.md) — IQ recording format requirements
+- sigmf-python PyPI v1.7.2 (pypi.org/project/SigMF/) — dependency verification
+- pyserial-asyncio-fast PyPI v0.16 (pypi.org/project/pyserial-asyncio-fast/) — async serial dependency
+- scipy release matrix (docs.scipy.org/doc/scipy/release.html) — Python 3.10 version ceiling confirmed
+- Redis Streams documentation (redis.io) — DLQ pattern, MAXLEN semantics, pipeline batching
+- HackRF Tools documentation (hackrf.readthedocs.io) — hackrf_sweep, retune latency context
 
 ### Secondary (MEDIUM confidence)
+- PySDR Guide — IQ Files and SigMF (pysdr.org/content/iq_files.html) — format overview and SigMF field semantics
+- PySDR Guide — HackRF in Python (pysdr.org/content/hackrf.html) — retune latency estimates
+- pyserial-asyncio docs (pyserial-asyncio.readthedocs.io) — StreamReader/StreamWriter pattern
+- Community reports — HackRF USB retune latency ~10–50 ms; 100 ms minimum dwell is a conservative estimate
 
-- redis-py PyPI (v7.4.0 release date and changelog) — https://pypi.org/project/redis/
-- hiredis PyPI (v3.3.1 release date) — https://pypi.org/project/hiredis/
-- pyserial PyPI (v3.5 current stable) — https://pypi.org/project/pyserial/
-- libhackrf issue #1570 — stop_rx deadlock in Python — https://github.com/greatscottgadgets/hackrf/issues/1570
-- libhackrf issue #916 — rapid start/stop RX corruption — https://github.com/greatscottgadgets/hackrf/issues/916
-- pyhackrf2 GitHub — TX API inferred from source — https://github.com/eizemazal/pyhackrf2
-
-### Tertiary (LOW confidence / needs validation)
-
-- Mayhem concurrent serial + pyhackrf2 access behavior — not documented, empirical test required
-- pyhackrf2 `start_tx()` half-duplex switching timing — inferred from libhackrf, not tested
+### Tertiary (LOW confidence)
+- None — all findings in this summary are backed by primary or secondary sources
 
 ---
 
-*Research completed: 2026-03-29*
+*Research completed: 2026-03-30*
 *Ready for roadmap: yes*
