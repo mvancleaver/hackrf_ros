@@ -30,6 +30,11 @@ Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX 
 - v TX capability: TXController with pyhackrf2 start_tx(), buffer-based TX, float32->int8 conversion, half-duplex RX pause/resume — Phase 4
 - v TX authorization guardrails: one-token-per-TX via Lua GETDEL, frequency allowlist with ALWAYS_BLOCKED (EPIRB/ADS-B), per-session antenna confirmation, TX stop on shutdown — Phase 4
 
+- v Standalone pymayhem package: pip-installable serial control for PortaPack with domain-organized API (radio, ui, fs, sensors, system), no ROS2/Redis dependency — Phase 5
+- v Redis-native HackRF driver: hackrf_driver package with HackRFDriver main loop, TXController, RedisBridge — no rclpy dependency in core — Phase 5
+- v Thin ROS2 bridge: BridgeNode reads IQ from Redis Pub/Sub, publishes to /hackrf/iq and /hackrf/state, exposes services for commands — no hardware imports — Phase 5
+- v Full test regression: 135 tests across 3 packages (pymayhem, hackrf_driver, test/) with zero failures — Phase 5
+
 ### Active
 
 (All v1 requirements validated)
@@ -86,4 +91,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-30 after Phase 4 completion — all v1 requirements validated*
+*Last updated: 2026-03-30 after Phase 5 completion — all 5 phases complete, v1.0 milestone done*
