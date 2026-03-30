@@ -1,34 +1,38 @@
-"""Unit tests for RedisBridge integration in HackRFNode.
+"""Unit tests for BridgeNode and bridge_services — adapted from Plan 03-02 tests.
 
-Tests behaviors 1-9 from Plan 03-02 Task 2.
-All ROS2, pyhackrf2, serial, and Redis calls are mocked — no live hardware required.
+Tests bridge-specific behaviors:
+  - BridgeNode imports redis (not pyhackrf2)
+  - BridgeNode has publisher_ (Float32MultiArray) and _state_publisher (String)
+  - _bridge_loop publishes Float32MultiArray on hackrf:iq:notify
+  - _publish_state() publishes JSON string to /hackrf/state
+  - destroy_node sets _stop_event
+  - /hackrf/cmd subscription RPUSHes valid JSON to hackrf:cmd
+  - /hackrf/mayhem/appstart service queues appstart command
+
+All ROS2 and Redis calls are mocked — no live hardware required.
 """
 
+import json
 import sys
-import unittest
-from unittest.mock import patch, MagicMock, call
-import queue
 import threading
-import time
+import unittest
+from unittest.mock import MagicMock, call
+
+import numpy as np
 
 
 # ---------------------------------------------------------------------------
-# Patch all hardware/ROS2 modules before importing hackrf_node
+# Patch all hardware/ROS2 modules before importing bridge modules
 # ---------------------------------------------------------------------------
 
-# Mock pyhackrf2
-mock_pyhackrf2 = MagicMock()
-mock_hackrf_instance = MagicMock()
-mock_hackrf_instance.start_rx = MagicMock()
-mock_hackrf_instance.stop_rx = MagicMock()
-mock_hackrf_instance.close = MagicMock()
-mock_pyhackrf2.HackRF.return_value = mock_hackrf_instance
-sys.modules['pyhackrf2'] = mock_pyhackrf2
-
-# Mock rclpy.node.Node as a real Python base class so HackRFNode can be instantiated
+# Mock rclpy.node.Node as a real Python base class so BridgeNode can be
+# instantiated with object.__new__() in tests.
 class _FakeNode:
-    """Minimal stub for rclpy.node.Node to allow object.__new__(HackRFNode)."""
-    pass
+    """Minimal stub for rclpy.node.Node."""
+
+    def destroy_node(self):
+        pass
+
 
 mock_rclpy_node_module = MagicMock()
 mock_rclpy_node_module.Node = _FakeNode
@@ -42,70 +46,35 @@ sys.modules['rclpy.parameter'] = MagicMock()
 sys.modules['rclpy.exceptions'] = MagicMock()
 sys.modules['rcl_interfaces'] = MagicMock()
 sys.modules['rcl_interfaces.msg'] = MagicMock()
+
+# Set up Float32MultiArray and String as simple classes so isinstance() checks work
+_Float32MultiArray = type('Float32MultiArray', (), {'data': []})
+_String = type('String', (), {'data': ''})
+
+mock_std_msgs_msg = MagicMock()
+mock_std_msgs_msg.Float32MultiArray = _Float32MultiArray
+mock_std_msgs_msg.String = _String
 sys.modules['std_msgs'] = MagicMock()
-sys.modules['std_msgs.msg'] = MagicMock()
+sys.modules['std_msgs.msg'] = mock_std_msgs_msg
+
 sys.modules['std_srvs'] = MagicMock()
 sys.modules['std_srvs.srv'] = MagicMock()
-sys.modules['hackrf_ros_interfaces'] = MagicMock()
-sys.modules['hackrf_ros_interfaces.srv'] = MagicMock()
-
-# Mock serial
-mock_serial_module = MagicMock()
-sys.modules['serial'] = mock_serial_module
-
-# Mock numpy (allow real numpy usage)
-import numpy as np
 
 # Mock redis
 mock_redis_module = MagicMock()
 sys.modules['redis'] = mock_redis_module
 sys.modules['redis.exceptions'] = MagicMock()
 
-
-def _make_node():
-    """Build a minimal HackRFNode-like object for unit testing.
-
-    Instead of spinning up a real ROS2 node, we build a plain Python object
-    that inherits from object and has the same attributes/methods that
-    HackRFNode sets up. We then import and inspect the real module to verify
-    the attributes and methods are present.
-    """
-    # Import the module — this exercises the import path
-    import importlib
-    import hackrf_ros.hackrf_node as m
-    return m
+# Mock pyhackrf2 (must not be imported by bridge)
+sys.modules['pyhackrf2'] = MagicMock()
+sys.modules['serial'] = MagicMock()
+sys.modules['hackrf_ros_interfaces'] = MagicMock()
+sys.modules['hackrf_ros_interfaces.srv'] = MagicMock()
 
 
-class TestHackRFNodeRedisAttributes(unittest.TestCase):
-    """Verify that HackRFNode module exposes the required attributes and methods."""
-
-    def test_hackrf_node_module_imports_redis_bridge(self):
-        """Behavior 1: hackrf_node imports RedisBridge from redis_bridge."""
-        import hackrf_ros.hackrf_node as m
-        self.assertTrue(
-            hasattr(m, 'RedisBridge'),
-            "hackrf_node.py must import RedisBridge at module level"
-        )
-
-    def test_hackrf_node_class_has_required_methods(self):
-        """Behaviors 8 & 9: HackRFNode class has all 9 command-dispatch target methods."""
-        import hackrf_ros.hackrf_node as m
-        required_methods = [
-            '_build_state_dict',
-            '_set_center_frequency',
-            '_set_sample_rate',
-            '_set_lna_gain',
-            '_set_vga_gain',
-            '_set_amp_enabled',
-            '_start_rx_if_stopped',
-            '_stop_rx_if_running',
-        ]
-        for method_name in required_methods:
-            self.assertTrue(
-                hasattr(m.HackRFNode, method_name),
-                f"HackRFNode must have method {method_name}"
-            )
-
+# ---------------------------------------------------------------------------
+# Fake logger
+# ---------------------------------------------------------------------------
 
 class _FakeLogger:
     """Minimal logger stub matching rclpy.Logger interface."""
@@ -129,229 +98,355 @@ class _FakeLogger:
         self.messages.append(('debug', msg))
 
 
-def _make_minimal_node_instance():
-    """Create a HackRFNode-like instance with mocked dependencies for unit testing."""
-    import hackrf_ros.hackrf_node as m
+# ---------------------------------------------------------------------------
+# Bridge instance factory — bypasses __init__ for unit testing
+# ---------------------------------------------------------------------------
 
-    # Build a stub instance bypassing __init__ entirely
-    node = object.__new__(m.HackRFNode)
+def _make_minimal_bridge_instance():
+    """Create a BridgeNode-like stub with mocked dependencies."""
+    import hackrf_ros.bridge_node as m
 
-    # Install minimal required state
-    node._last_params = {
-        'center_frequency': 2447e6,
-        'sample_rate': 8e6,
-        'lna_gain': 16,
-        'vga_gain': 20,
-        'amp_enabled': False,
-    }
-    node._start_time = time.monotonic()
-    node.is_hackrf_streaming = False
-    node._hackrf = None
-    node._serial_connected = False
+    # Build a stub bypassing __init__ entirely
+    node = object.__new__(m.BridgeNode)
+
+    # Install required attributes
+    node.publisher_ = MagicMock()
+    node._state_publisher = MagicMock()
+    node._redis = MagicMock()
     node._stop_event = threading.Event()
-    node._device_lock = threading.RLock()
-    node._redis_queue = queue.Queue(maxsize=64)
-    node._ros_queue = queue.Queue(maxsize=64)
-    node._reconnect_delay = 1.0
-    node._reconnect_timer = None
-    node._serial_reconnect_delay = 1.0
-    node._serial_reconnect_timer = None
 
-    # Install fake mayhem
-    mock_mayhem = MagicMock()
-    mock_mayhem._known_apps = ['capture', 'scanner']
-    mock_mayhem._active_app = 'capture'
-    node._mayhem = mock_mayhem
-
-    # Install fake redis_bridge
-    mock_redis_bridge = MagicMock()
-    node._redis_bridge = mock_redis_bridge
-
-    # Install fake logger
+    # Logger
     node._fake_logger = _FakeLogger()
     node.get_logger = lambda: node._fake_logger
-
-    # Install fake ROS2 set_parameters
-    node.set_parameters = MagicMock()
 
     return node
 
 
-class TestBuildStateDict(unittest.TestCase):
-    """Behavior 4: _build_state_dict() returns dict with all D-08 fields."""
+# ---------------------------------------------------------------------------
+# Tests: BridgeNode module and class structure
+# ---------------------------------------------------------------------------
 
-    def setUp(self):
-        self.node = _make_minimal_node_instance()
+class TestBridgeNodeModuleImports(unittest.TestCase):
+    """BridgeNode module imports redis (not pyhackrf2)."""
 
-    def test_build_state_dict_has_all_d08_fields(self):
-        """_build_state_dict() must include all 11 required fields from D-08."""
-        state = self.node._build_state_dict()
-        required_fields = [
-            'center_frequency',
-            'sample_rate',
-            'lna_gain',
-            'vga_gain',
-            'amp_enabled',
-            'is_streaming',
-            'connected',
-            'uptime_s',
-            'active_app',
-            'discovered_apps',
-            'serial_connected',
-        ]
-        for field in required_fields:
-            self.assertIn(field, state, f"State dict must include field '{field}'")
+    def test_bridge_node_module_imports_redis(self):
+        """bridge_node.py must reference redis at module level."""
+        import hackrf_ros.bridge_node as m
+        # The module imports redis (checked via the name in the module namespace)
+        self.assertTrue(
+            hasattr(m, 'redis'),
+            "bridge_node.py must have 'redis' in module namespace"
+        )
 
-    def test_build_state_dict_reflects_last_params(self):
-        """_build_state_dict() must reflect _last_params values."""
-        self.node._last_params['center_frequency'] = 433.92e6
-        state = self.node._build_state_dict()
-        self.assertEqual(state['center_frequency'], 433.92e6)
+    def test_bridge_node_has_no_pyhackrf2_import(self):
+        """bridge_node.py must NOT import pyhackrf2 at module level."""
+        import hackrf_ros.bridge_node as m
+        src_path = m.__file__
+        with open(src_path) as f:
+            source = f.read()
+        import_lines = [l for l in source.split('\n')
+                        if l.startswith('import ') or l.startswith('from ')]
+        hardware_imports = [l for l in import_lines
+                            if 'pyhackrf2' in l or 'mayhem_serial' in l
+                            or 'tx_controller' in l]
+        self.assertEqual(
+            hardware_imports, [],
+            f"bridge_node.py must not import hardware libs: {hardware_imports}"
+        )
 
-    def test_build_state_dict_reflects_streaming_state(self):
-        """_build_state_dict() must reflect is_hackrf_streaming."""
-        self.node.is_hackrf_streaming = True
-        state = self.node._build_state_dict()
-        self.assertTrue(state['is_streaming'])
-
-    def test_build_state_dict_connected_field(self):
-        """_build_state_dict() connected is True when _hackrf is not None."""
-        mock_hackrf = MagicMock()
-        self.node._hackrf = mock_hackrf
-        state = self.node._build_state_dict()
-        self.assertTrue(state['connected'])
-
-    def test_build_state_dict_uptime_s_is_positive(self):
-        """_build_state_dict() uptime_s must be a positive float."""
-        state = self.node._build_state_dict()
-        self.assertGreaterEqual(state['uptime_s'], 0.0)
-
-    def test_build_state_dict_active_app_from_mayhem(self):
-        """_build_state_dict() active_app comes from _mayhem._active_app."""
-        self.node._mayhem._active_app = 'scanner'
-        state = self.node._build_state_dict()
-        self.assertEqual(state['active_app'], 'scanner')
-
-    def test_build_state_dict_discovered_apps_is_json_string(self):
-        """_build_state_dict() discovered_apps must be a JSON-encoded string."""
-        import json
-        state = self.node._build_state_dict()
-        # Should not raise
-        apps = json.loads(state['discovered_apps'])
-        self.assertIsInstance(apps, list)
+    def test_bridge_node_exports_bridge_node_class(self):
+        """bridge_node.py must export BridgeNode class."""
+        import hackrf_ros.bridge_node as m
+        self.assertTrue(hasattr(m, 'BridgeNode'))
+        self.assertTrue(hasattr(m, 'main'))
 
 
-class TestSetParameterMethods(unittest.TestCase):
-    """Behavior 9: _set_center_frequency, _set_sample_rate, etc. call set_parameters."""
+class TestBridgeNodeAttributes(unittest.TestCase):
+    """BridgeNode class has required publisher attributes and methods."""
 
-    def setUp(self):
-        self.node = _make_minimal_node_instance()
+    def test_bridge_node_has_destroy_node(self):
+        """BridgeNode must have destroy_node method."""
+        import hackrf_ros.bridge_node as m
+        self.assertTrue(hasattr(m.BridgeNode, 'destroy_node'))
 
-    def test_set_center_frequency_calls_set_parameters(self):
-        """_set_center_frequency() must call self.set_parameters with a Parameter."""
-        self.node._set_center_frequency(433.92e6)
-        self.node.set_parameters.assert_called_once()
-        args = self.node.set_parameters.call_args[0][0]
-        self.assertEqual(len(args), 1)
+    def test_bridge_node_has_bridge_loop(self):
+        """BridgeNode must have _bridge_loop method."""
+        import hackrf_ros.bridge_node as m
+        self.assertTrue(hasattr(m.BridgeNode, '_bridge_loop'))
 
-    def test_set_sample_rate_calls_set_parameters(self):
-        """_set_sample_rate() must call self.set_parameters."""
-        self.node._set_sample_rate(10e6)
-        self.node.set_parameters.assert_called_once()
+    def test_bridge_node_has_publish_state(self):
+        """BridgeNode must have _publish_state method."""
+        import hackrf_ros.bridge_node as m
+        self.assertTrue(hasattr(m.BridgeNode, '_publish_state'))
 
-    def test_set_lna_gain_calls_set_parameters(self):
-        """_set_lna_gain() must call self.set_parameters."""
-        self.node._set_lna_gain(24)
-        self.node.set_parameters.assert_called_once()
+    def test_bridge_instance_has_publisher_for_iq(self):
+        """Stub instance has publisher_ for /hackrf/iq."""
+        node = _make_minimal_bridge_instance()
+        self.assertIsNotNone(node.publisher_)
 
-    def test_set_vga_gain_calls_set_parameters(self):
-        """_set_vga_gain() must call self.set_parameters."""
-        self.node._set_vga_gain(30)
-        self.node.set_parameters.assert_called_once()
-
-    def test_set_amp_enabled_calls_set_parameters(self):
-        """_set_amp_enabled() must call self.set_parameters."""
-        self.node._set_amp_enabled(True)
-        self.node.set_parameters.assert_called_once()
+    def test_bridge_instance_has_state_publisher(self):
+        """Stub instance has _state_publisher for /hackrf/state."""
+        node = _make_minimal_bridge_instance()
+        self.assertIsNotNone(node._state_publisher)
 
 
-class TestStartStopRxMethods(unittest.TestCase):
-    """Behavior 8: _start_rx_if_stopped and _stop_rx_if_running exist and work."""
+# ---------------------------------------------------------------------------
+# Tests: _bridge_loop publishes Float32MultiArray
+# ---------------------------------------------------------------------------
 
-    def setUp(self):
-        self.node = _make_minimal_node_instance()
+class TestBridgeLoop(unittest.TestCase):
+    """_bridge_loop publishes Float32MultiArray on hackrf:iq:notify notification."""
 
-    def test_start_rx_if_stopped_does_nothing_when_no_device(self):
-        """_start_rx_if_stopped() is a no-op when _hackrf is None."""
-        self.node._hackrf = None
-        self.node.is_hackrf_streaming = False
-        # Should not raise
-        self.node._start_rx_if_stopped()
+    def test_bridge_loop_publishes_float32multiarray_on_message(self):
+        """Given mocked xrevrange entry, _bridge_loop calls publisher_.publish."""
+        node = _make_minimal_bridge_instance()
 
-    def test_start_rx_if_stopped_does_nothing_when_already_streaming(self):
-        """_start_rx_if_stopped() is a no-op when already streaming."""
-        self.node._hackrf = MagicMock()
-        self.node.is_hackrf_streaming = True
-        self.node._start_rx_if_stopped()
-        self.node._hackrf.start_rx.assert_not_called()
+        # Build float32 bytes for the mock IQ entry
+        iq_data = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+        fake_entry = (b'1234-0', {b'data': iq_data.tobytes()})
 
-    def test_start_rx_if_stopped_starts_rx_when_stopped_with_device(self):
-        """_start_rx_if_stopped() calls start_rx when device present and not streaming."""
-        mock_hackrf = MagicMock()
-        self.node._hackrf = mock_hackrf
-        self.node.is_hackrf_streaming = False
-        self.node._start_rx_if_stopped()
-        mock_hackrf.start_rx.assert_called_once()
-        self.assertTrue(self.node.is_hackrf_streaming)
+        # Set stop event after one iteration
+        call_count = [0]
+        original_get_message = MagicMock()
 
-    def test_stop_rx_if_running_does_nothing_when_not_streaming(self):
-        """_stop_rx_if_running() is a no-op when not streaming."""
-        self.node._hackrf = MagicMock()
-        self.node.is_hackrf_streaming = False
-        self.node._stop_rx_if_running()
-        self.node._hackrf.stop_rx.assert_not_called()
+        def get_message_side_effect(timeout=0.1):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return {'type': 'message', 'data': b'1234-0'}
+            # Stop after second call
+            node._stop_event.set()
+            return None
 
-    def test_stop_rx_if_running_stops_rx_when_streaming(self):
-        """_stop_rx_if_running() calls stop_rx when device present and streaming."""
-        mock_hackrf = MagicMock()
-        self.node._hackrf = mock_hackrf
-        self.node.is_hackrf_streaming = True
-        self.node._stop_rx_if_running()
-        mock_hackrf.stop_rx.assert_called_once()
-        self.assertFalse(self.node.is_hackrf_streaming)
+        mock_pubsub = MagicMock()
+        mock_pubsub.get_message.side_effect = get_message_side_effect
+        node._redis.pubsub.return_value = mock_pubsub
+        node._redis.xrevrange.return_value = [fake_entry]
+
+        # Patch _publish_state to a no-op
+        node._publish_state = MagicMock()
+
+        # Run _bridge_loop in a thread to prevent hang
+        import hackrf_ros.bridge_node as m
+        t = threading.Thread(target=m.BridgeNode._bridge_loop, args=(node,))
+        t.start()
+        t.join(timeout=2.0)
+
+        # publisher_.publish must have been called with something
+        node.publisher_.publish.assert_called()
+        published_arg = node.publisher_.publish.call_args[0][0]
+        # Data should contain the IQ floats
+        self.assertIsNotNone(published_arg.data)
 
 
-class TestRedisBridgeIntegrationPoints(unittest.TestCase):
-    """Behaviors 1, 5, 6, 7: RedisBridge used at correct integration points."""
+# ---------------------------------------------------------------------------
+# Tests: _publish_state publishes JSON string
+# ---------------------------------------------------------------------------
 
-    def setUp(self):
-        self.node = _make_minimal_node_instance()
+class TestPublishState(unittest.TestCase):
+    """_publish_state() calls _state_publisher.publish with JSON string."""
 
-    def test_redis_bridge_attribute_exists(self):
-        """Behavior 1: _redis_bridge attribute is accessible on node."""
-        self.assertTrue(hasattr(self.node, '_redis_bridge'))
+    def test_publish_state_calls_state_publisher(self):
+        """_publish_state() publishes JSON dict to /hackrf/state."""
+        node = _make_minimal_bridge_instance()
 
-    def test_publish_state_called_in_on_parameter_event_with_hasattr_guard(self):
-        """Behavior 5: When _redis_bridge exists, publish_state is callable from parameter handler."""
-        # Simulate the pattern used in _on_parameter_event
-        if hasattr(self.node, '_redis_bridge'):
-            self.node._redis_bridge.publish_state(self.node._build_state_dict())
-        self.node._redis_bridge.publish_state.assert_called_once()
-        call_args = self.node._redis_bridge.publish_state.call_args[0][0]
-        self.assertIn('center_frequency', call_args)
+        # Mock hgetall returning a state dict
+        node._redis.hgetall.return_value = {
+            b'center_frequency': b'433920000',
+            b'is_streaming': b'True',
+        }
 
-    def test_publish_state_called_in_handle_appstart_with_hasattr_guard(self):
-        """Behavior 6: When _redis_bridge exists, publish_state is callable from appstart handler."""
-        ok = True
-        if ok and hasattr(self.node, '_redis_bridge'):
-            self.node._redis_bridge.publish_state(self.node._build_state_dict())
-        self.node._redis_bridge.publish_state.assert_called_once()
+        import hackrf_ros.bridge_node as m
+        m.BridgeNode._publish_state(node)
 
-    def test_redis_bridge_close_called_on_destroy(self):
-        """Behavior 7: _redis_bridge.close() is callable for use in destroy_node."""
-        if hasattr(self.node, '_redis_bridge'):
-            self.node._redis_bridge.close()
-        self.node._redis_bridge.close.assert_called_once()
+        node._state_publisher.publish.assert_called_once()
+        published_arg = node._state_publisher.publish.call_args[0][0]
+        # Should be parseable JSON
+        data = json.loads(published_arg.data)
+        self.assertIn('center_frequency', data)
+        self.assertEqual(data['center_frequency'], '433920000')
+
+    def test_publish_state_noop_when_hgetall_empty(self):
+        """_publish_state() does nothing when hgetall returns empty dict."""
+        node = _make_minimal_bridge_instance()
+        node._redis.hgetall.return_value = {}
+
+        import hackrf_ros.bridge_node as m
+        m.BridgeNode._publish_state(node)
+
+        node._state_publisher.publish.assert_not_called()
+
+    def test_publish_state_noop_when_redis_none(self):
+        """_publish_state() does nothing when _redis is None."""
+        node = _make_minimal_bridge_instance()
+        node._redis = None
+
+        import hackrf_ros.bridge_node as m
+        m.BridgeNode._publish_state(node)
+
+        # No exception, no publish call
+        node._state_publisher.publish.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests: destroy_node sets _stop_event
+# ---------------------------------------------------------------------------
+
+class TestDestroyNode(unittest.TestCase):
+    """destroy_node() sets _stop_event and closes Redis."""
+
+    def test_destroy_node_sets_stop_event(self):
+        """destroy_node() must set _stop_event."""
+        node = _make_minimal_bridge_instance()
+        self.assertFalse(node._stop_event.is_set())
+
+        # Patch super().destroy_node() so we don't need a real ROS2 node
+        import hackrf_ros.bridge_node as m
+
+        import unittest.mock as mock_lib
+        with mock_lib.patch.object(_FakeNode, 'destroy_node', return_value=None):
+            m.BridgeNode.destroy_node(node)
+
+        self.assertTrue(node._stop_event.is_set())
+
+    def test_destroy_node_closes_redis(self):
+        """destroy_node() must call _redis.close()."""
+        node = _make_minimal_bridge_instance()
+
+        import hackrf_ros.bridge_node as m
+        import unittest.mock as mock_lib
+        with mock_lib.patch.object(_FakeNode, 'destroy_node', return_value=None):
+            m.BridgeNode.destroy_node(node)
+
+        node._redis.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: bridge_services — command subscription and service handlers
+# ---------------------------------------------------------------------------
+
+class TestBridgeServices(unittest.TestCase):
+    """bridge_services handlers RPUSH commands to hackrf:cmd."""
+
+    def _make_mock_node(self):
+        fake_logger = _FakeLogger()
+        node = MagicMock()
+        node.get_logger.return_value = fake_logger
+        return node
+
+    def test_cmd_subscription_rpush(self):
+        """Valid JSON on /hackrf/cmd is RPUSHed to hackrf:cmd."""
+        from hackrf_ros.bridge_services import _make_cmd_handler
+
+        mock_redis = MagicMock()
+        node = self._make_mock_node()
+        handler = _make_cmd_handler(node, mock_redis)
+
+        # Simulate a ROS2 String message
+        msg = MagicMock()
+        msg.data = '{"cmd": "setfreq", "args": {"freq_hz": 433000000}}'
+        handler(msg)
+
+        mock_redis.rpush.assert_called_once()
+        rpush_key = mock_redis.rpush.call_args[0][0]
+        rpush_payload = json.loads(mock_redis.rpush.call_args[0][1])
+        self.assertEqual(rpush_key, 'hackrf:cmd')
+        self.assertEqual(rpush_payload['cmd'], 'setfreq')
+
+    def test_cmd_subscription_invalid_json_logs_warning(self):
+        """Invalid JSON on /hackrf/cmd logs a warning and does NOT rpush."""
+        from hackrf_ros.bridge_services import _make_cmd_handler
+
+        mock_redis = MagicMock()
+        node = self._make_mock_node()
+        handler = _make_cmd_handler(node, mock_redis)
+
+        msg = MagicMock()
+        msg.data = 'not-valid-json'
+        handler(msg)
+
+        mock_redis.rpush.assert_not_called()
+
+    def test_appstart_service_queues_cmd(self):
+        """appstart Trigger handler RPUSHes appstart command and returns success."""
+        from hackrf_ros.bridge_services import _make_mayhem_handler
+
+        mock_redis = MagicMock()
+        handler = _make_mayhem_handler(mock_redis, 'appstart')
+
+        request = MagicMock()
+        response = MagicMock()
+        response.success = False
+        response.message = ''
+
+        result = handler(request, response)
+
+        self.assertTrue(result.success)
+        self.assertIn('appstart', result.message)
+        mock_redis.rpush.assert_called_once()
+        rpush_key = mock_redis.rpush.call_args[0][0]
+        rpush_payload = json.loads(mock_redis.rpush.call_args[0][1])
+        self.assertEqual(rpush_key, 'hackrf:cmd')
+        self.assertEqual(rpush_payload['cmd'], 'appstart')
+
+    def test_setfreq_service_reads_state_and_queues(self):
+        """setfreq Trigger handler reads setfreq_request from hackrf:state and queues."""
+        from hackrf_ros.bridge_services import _make_setfreq_handler
+
+        mock_redis = MagicMock()
+        mock_redis.hget.return_value = b'433920000'
+        node = self._make_mock_node()
+        handler = _make_setfreq_handler(node, mock_redis)
+
+        request = MagicMock()
+        response = MagicMock()
+        response.success = False
+        response.message = ''
+
+        result = handler(request, response)
+
+        self.assertTrue(result.success)
+        self.assertIn('setfreq', result.message)
+        mock_redis.rpush.assert_called_once()
+        rpush_payload = json.loads(mock_redis.rpush.call_args[0][1])
+        self.assertEqual(rpush_payload['cmd'], 'setfreq')
+        self.assertEqual(rpush_payload['args']['freq_hz'], 433920000)
+
+    def test_setfreq_service_fails_when_no_freq_set(self):
+        """setfreq Trigger handler returns success=False when setfreq_request not set."""
+        from hackrf_ros.bridge_services import _make_setfreq_handler
+
+        mock_redis = MagicMock()
+        mock_redis.hget.return_value = None  # key not set
+        node = self._make_mock_node()
+        handler = _make_setfreq_handler(node, mock_redis)
+
+        request = MagicMock()
+        response = MagicMock()
+        response.success = True
+        response.message = ''
+
+        result = handler(request, response)
+
+        self.assertFalse(result.success)
+        mock_redis.rpush.assert_not_called()
+
+    def test_radioinfo_service_queues_cmd(self):
+        """radioinfo Trigger handler RPUSHes radioinfo command and returns success."""
+        from hackrf_ros.bridge_services import _make_mayhem_handler
+
+        mock_redis = MagicMock()
+        handler = _make_mayhem_handler(mock_redis, 'radioinfo')
+
+        request = MagicMock()
+        response = MagicMock()
+        response.success = False
+        response.message = ''
+
+        result = handler(request, response)
+
+        self.assertTrue(result.success)
+        rpush_payload = json.loads(mock_redis.rpush.call_args[0][1])
+        self.assertEqual(rpush_payload['cmd'], 'radioinfo')
 
 
 if __name__ == '__main__':
