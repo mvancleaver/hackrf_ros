@@ -16,6 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 2: Mayhem Serial Interface** - Build serial control for Mayhem firmware and resolve the mode-conflict question
 - [x] **Phase 3: Redis Bridge** - Stream IQ data and device state to Redis; accept control commands via Redis (completed 2026-03-30)
 - [x] **Phase 4: TX Authorization** - Add safe, authorized transmission with frequency allowlist and hardware guardrails (completed 2026-03-30)
+- [ ] **Phase 5: PyMayhem Refactor** - Extract standalone pymayhem package, Redis-native driver, ROS2 bridge plugin
 
 ## Phase Details
 
@@ -84,11 +85,23 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. RX Pipeline Correctness | 0/3 | In progress | - |
-| 2. Mayhem Serial Interface | 0/3 | Not started | - |
-| 3. Redis Bridge | 2/2 | Complete   | 2026-03-30 |
-| 4. TX Authorization | 2/2 | Complete   | 2026-03-30 |
+| 1. RX Pipeline Correctness | 3/3 | Complete | 2026-03-30 |
+| 2. Mayhem Serial Interface | 3/3 | Complete | 2026-03-30 |
+| 3. Redis Bridge | 2/2 | Complete | 2026-03-30 |
+| 4. TX Authorization | 2/2 | Complete | 2026-03-30 |
+| 5. PyMayhem Refactor | 0/? | Not started | - |
+
+### Phase 5: PyMayhem Refactor
+**Goal**: Extract a standalone `pymayhem` Python package from the Mayhem serial code, refactor the HackRF driver to be Redis-native (no ROS2 dependency in core), and create a thin ROS2 bridge node that reads IQ from Redis and publishes to ROS2 topics
+**Depends on**: Phase 4
+**Requirements**: REF-01, REF-02, REF-03, REF-04, REF-05, REF-06, REF-07
+**Success Criteria** (what must be TRUE):
+  1. `pymayhem` is a standalone pip-installable package that controls the PortaPack via serial without any ROS2 or Redis dependency — `pip install pymayhem && python -c "from pymayhem import MayhemClient"` works
+  2. The HackRF driver runs standalone with Redis as its only external interface — no rclpy import in the core driver process
+  3. A separate ROS2 bridge node reads IQ from `hackrf:iq:stream` Redis Stream and publishes to `/hackrf/iq` — existing ROS2 subscribers work unchanged
+  4. All 68 existing unit tests pass after the refactor (no regression)
+**Plans**: TBD

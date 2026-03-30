@@ -44,6 +44,16 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **TX-06**: TX automatically stopped on node shutdown (stop_tx() in destroy_node)
 - [x] **TX-07**: TX commands routed through Redis command interface with authorization field required
 
+### Refactor
+
+- [ ] **REF-01**: `pymayhem` is a standalone pip-installable Python package with no ROS2 or Redis dependencies
+- [ ] **REF-02**: `pymayhem` exposes all 47 Mayhem serial commands organized by domain (radio, ui, filesystem, sensors, system)
+- [ ] **REF-03**: `pymayhem` handles `appstart` USB reset with automatic reconnection
+- [ ] **REF-04**: HackRF core driver runs standalone with Redis as only external interface (no rclpy import)
+- [ ] **REF-05**: ROS2 bridge node reads IQ from `hackrf:iq:stream` and publishes to `/hackrf/iq` topic
+- [ ] **REF-06**: ROS2 bridge node subscribes to `hackrf:state` and publishes device state to ROS2 topics
+- [ ] **REF-07**: All 68 existing unit tests pass after refactor (no regression)
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -107,12 +117,20 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TX-05 | Phase 4 | Complete |
 | TX-06 | Phase 4 | Complete |
 | TX-07 | Phase 4 | Complete |
+| REF-01 | Phase 5 | Pending |
+| REF-02 | Phase 5 | Pending |
+| REF-03 | Phase 5 | Pending |
+| REF-04 | Phase 5 | Pending |
+| REF-05 | Phase 5 | Pending |
+| REF-06 | Phase 5 | Pending |
+| REF-07 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 25 total
-- Mapped to phases: 25
+- v1 requirements: 25 total (all complete)
+- Refactor requirements: 7 total (Phase 5)
+- Mapped to phases: 32
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-29*
-*Last updated: 2026-03-29 after roadmap creation*
+*Last updated: 2026-03-30 after Phase 5 addition*
