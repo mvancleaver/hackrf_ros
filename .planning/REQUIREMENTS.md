@@ -49,10 +49,10 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **REF-01**: `pymayhem` is a standalone pip-installable Python package with no ROS2 or Redis dependencies
 - [x] **REF-02**: `pymayhem` exposes all 47 Mayhem serial commands organized by domain (radio, ui, filesystem, sensors, system)
 - [x] **REF-03**: `pymayhem` handles `appstart` USB reset with automatic reconnection
-- [ ] **REF-04**: HackRF core driver runs standalone with Redis as only external interface (no rclpy import)
+- [x] **REF-04**: HackRF core driver runs standalone with Redis as only external interface (no rclpy import)
 - [ ] **REF-05**: ROS2 bridge node reads IQ from `hackrf:iq:stream` and publishes to `/hackrf/iq` topic
 - [ ] **REF-06**: ROS2 bridge node subscribes to `hackrf:state` and publishes device state to ROS2 topics
-- [ ] **REF-07**: All 68 existing unit tests pass after refactor (no regression)
+- [x] **REF-07**: All 68 existing unit tests pass after refactor (no regression)
 
 ## v2 Requirements
 
@@ -120,10 +120,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REF-01 | Phase 5 | Complete |
 | REF-02 | Phase 5 | Complete |
 | REF-03 | Phase 5 | Complete |
-| REF-04 | Phase 5 | Pending |
+| REF-04 | Phase 5 | Complete |
 | REF-05 | Phase 5 | Pending |
 | REF-06 | Phase 5 | Pending |
-| REF-07 | Phase 5 | Pending |
+| REF-07 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 25 total (all complete)

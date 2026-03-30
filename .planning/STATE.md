@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-pymayhem-refactor 05-01-PLAN.md
-last_updated: "2026-03-30T09:12:53.958Z"
+stopped_at: Completed 05-pymayhem-refactor 05-02-PLAN.md
+last_updated: "2026-03-30T09:23:33.309Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 15
-  completed_plans: 11
+  completed_plans: 12
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 ## Current Position
 
 Phase: 05 (pymayhem-refactor) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-03-30
 
@@ -64,6 +64,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-tx-authorization P02 | 8min | 2 tasks | 3 files |
 | Phase 04-tx-authorization P02 | 10min | 3 tasks | 2 files |
 | Phase 05-pymayhem-refactor P01 | 6min | 2 tasks | 14 files |
+| Phase 05-pymayhem-refactor P02 | 7min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,8 @@ Recent decisions affecting current work:
 - [Phase 04-tx-authorization]: _last_tx_freq attribute added to TXController.start_tx() for state dict tracking without changing guard logic
 - [Phase 05-pymayhem-refactor]: pymayhem uses stdlib logging.getLogger('pymayhem.serial') instead of injected logger; domain objects receive _send_command callable at construction via callable injection pattern (D-04)
 - [Phase 05-pymayhem-refactor]: setup.cfg added alongside pyproject.toml for legacy editable install compatibility with system pip 22.0.2; UnsafeMayhemClient methods return raw list[str] for dangerous commands (caller controls error handling)
+- [Phase 05-pymayhem-refactor]: TXController takes hackrf_getter Callable, device_lock RLock, stop_rx_fn, start_rx_fn, freq_filter_enabled bool — no rclpy node reference
+- [Phase 05-pymayhem-refactor]: D-14 implemented: xadd returns entry_id, then redis.publish('hackrf:iq:notify', entry_id) in _xadd_iq()
 
 ### Pending Todos
 
@@ -104,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T09:12:53.954Z
-Stopped at: Completed 05-pymayhem-refactor 05-01-PLAN.md
+Last session: 2026-03-30T09:23:33.305Z
+Stopped at: Completed 05-pymayhem-refactor 05-02-PLAN.md
 Resume file: None
