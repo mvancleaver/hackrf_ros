@@ -116,7 +116,13 @@ Plans:
   4. Every entry in `hackrf:iq:stream` contains a `seq` field; a consumer reading two consecutive entries can detect any dropped buffer by checking for gaps in the sequence number
   5. Calling `validate_tx()` with a valid auth token returns True without consuming the token — a subsequent real TX can still use the same token
   6. A ROS2 service call to `/hackrf/confirm_antenna` sets the Redis antenna confirmation key and is acknowledged before any TX is attempted
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — Exception hierarchies for pymayhem and hackrf_driver; domain method conversion to raise-on-error (ERR-01, ERR-02, ERR-03)
+- [ ] 06-02-PLAN.md — _update_param raises HackRFConfigError; _dispatch_command exception boundary; IQ sequence numbers (ERR-04, ERR-05, REL-03)
+- [ ] 06-03-PLAN.md — BridgeNode reconnect loop; antenna confirmation service; legacy deprecation (REL-02, TXS-02, LEG-01)
+- [ ] 06-04-PLAN.md — validate_tx() dry-run method; periodic antenna re-read timer (TXS-01, TXS-03)
 
 ### Phase 7: Observability & Reliability
 **Goal**: Operators can observe live driver health through Redis metrics, failed commands are preserved for forensic review, and the driver self-heals from USB stalls without manual intervention
@@ -154,6 +160,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. Redis Bridge | 2/2 | Complete | 2026-03-30 |
 | 4. TX Authorization | 2/2 | Complete | 2026-03-30 |
 | 5. PyMayhem Refactor | 5/5 | Complete | 2026-03-30 |
-| 6. Foundation Hardening | 0/TBD | Not started | - |
+| 6. Foundation Hardening | 0/4 | Not started | - |
 | 7. Observability & Reliability | 0/TBD | Not started | - |
 | 8. Signal Capabilities | 0/TBD | Not started | - |
