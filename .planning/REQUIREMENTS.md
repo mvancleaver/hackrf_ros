@@ -82,37 +82,37 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| RX-01 | - | Pending |
-| RX-02 | - | Pending |
-| RX-03 | - | Pending |
-| RX-04 | - | Pending |
-| RX-05 | - | Pending |
-| RX-06 | - | Pending |
-| RX-07 | - | Pending |
-| RED-01 | - | Pending |
-| RED-02 | - | Pending |
-| RED-03 | - | Pending |
-| RED-04 | - | Pending |
-| RED-05 | - | Pending |
-| MAY-01 | - | Pending |
-| MAY-02 | - | Pending |
-| MAY-03 | - | Pending |
-| MAY-04 | - | Pending |
-| MAY-05 | - | Pending |
-| MAY-06 | - | Pending |
-| TX-01 | - | Pending |
-| TX-02 | - | Pending |
-| TX-03 | - | Pending |
-| TX-04 | - | Pending |
-| TX-05 | - | Pending |
-| TX-06 | - | Pending |
-| TX-07 | - | Pending |
+| RX-01 | Phase 1 | Pending |
+| RX-02 | Phase 1 | Pending |
+| RX-03 | Phase 1 | Pending |
+| RX-04 | Phase 1 | Pending |
+| RX-05 | Phase 1 | Pending |
+| RX-06 | Phase 1 | Pending |
+| RX-07 | Phase 1 | Pending |
+| MAY-01 | Phase 2 | Pending |
+| MAY-02 | Phase 2 | Pending |
+| MAY-03 | Phase 2 | Pending |
+| MAY-04 | Phase 2 | Pending |
+| MAY-05 | Phase 2 | Pending |
+| MAY-06 | Phase 2 | Pending |
+| RED-01 | Phase 3 | Pending |
+| RED-02 | Phase 3 | Pending |
+| RED-03 | Phase 3 | Pending |
+| RED-04 | Phase 3 | Pending |
+| RED-05 | Phase 3 | Pending |
+| TX-01 | Phase 4 | Pending |
+| TX-02 | Phase 4 | Pending |
+| TX-03 | Phase 4 | Pending |
+| TX-04 | Phase 4 | Pending |
+| TX-05 | Phase 4 | Pending |
+| TX-06 | Phase 4 | Pending |
+| TX-07 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 25 total
-- Mapped to phases: 0
-- Unmapped: 25
+- Mapped to phases: 25
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-29*
-*Last updated: 2026-03-29 after initial definition*
+*Last updated: 2026-03-29 after roadmap creation*
