@@ -27,11 +27,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Mayhem Serial Control
 
-- [ ] **MAY-01**: Serial port lifecycle: open /dev/ttyACM1 at startup, close at shutdown, reconnect on disconnect
-- [ ] **MAY-02**: applist queried at startup to discover available Mayhem apps (no hardcoded names)
-- [ ] **MAY-03**: appstart command switches between Mayhem apps by discovered short name
-- [ ] **MAY-04**: setfreq command updates frequency within active app (validates app supports it)
-- [ ] **MAY-05**: radioinfo query returns current device configuration for verification
+- [x] **MAY-01**: Serial port lifecycle: open /dev/ttyACM1 at startup, close at shutdown, reconnect on disconnect
+- [x] **MAY-02**: applist queried at startup to discover available Mayhem apps (no hardcoded names)
+- [x] **MAY-03**: appstart command switches between Mayhem apps by discovered short name
+- [x] **MAY-04**: setfreq command updates frequency within active app (validates app supports it)
+- [x] **MAY-05**: radioinfo query returns current device configuration for verification
 - [ ] **MAY-06**: Mode conflict between pyhackrf2 and serial verified empirically at startup with clear error if incompatible
 
 ### TX Control
@@ -89,11 +89,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RX-05 | Phase 1 | Complete |
 | RX-06 | Phase 1 | Complete |
 | RX-07 | Phase 1 | Complete |
-| MAY-01 | Phase 2 | Pending |
-| MAY-02 | Phase 2 | Pending |
-| MAY-03 | Phase 2 | Pending |
-| MAY-04 | Phase 2 | Pending |
-| MAY-05 | Phase 2 | Pending |
+| MAY-01 | Phase 2 | Complete |
+| MAY-02 | Phase 2 | Complete |
+| MAY-03 | Phase 2 | Complete |
+| MAY-04 | Phase 2 | Complete |
+| MAY-05 | Phase 2 | Complete |
 | MAY-06 | Phase 2 | Pending |
 | RED-01 | Phase 3 | Pending |
 | RED-02 | Phase 3 | Pending |
