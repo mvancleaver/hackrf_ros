@@ -2,13 +2,9 @@
 
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from rclpy.time import Time
-from rclpy.exceptions import ParameterNotDeclaredException
 from rcl_interfaces.msg import SetParametersResult
 from std_msgs.msg import Float32MultiArray  # Using standard message for IQ data
-from std_msgs.msg import MultiArrayDimension  # For Float32MultiArray layout
 from rcl_interfaces.msg import ParameterDescriptor  # For parameter descriptions
 
 import pyhackrf2  # The Python binding for libhackrf
@@ -21,16 +17,25 @@ CHUNK_IQ_PAIRS = 2048  # D-04: fixed chunk size
 _MIN_RECONNECT_DELAY = 1.0   # D-06: exponential backoff start
 _MAX_RECONNECT_DELAY = 30.0  # D-06: exponential backoff ceiling
 
+# RX-03: hardware parameter ranges — values outside these are rejected
+PARAM_RANGES = {
+    'center_frequency': (1e6,  6e9),
+    'sample_rate':      (2e6, 20e6),
+    'lna_gain':         (0,    40),
+    'vga_gain':         (0,    62),
+}
+# amp_enabled is bool — no range check needed
 
-class HackRFPuiblisherNode(Node):
+
+class HackRFNode(Node):
     """
     A ROS 2 node to interface with HackRF One, dynamically update its
     parameters, and publish acquired IQ data using standard messages.
     """
 
     def __init__(self):
-        super().__init__('hackrf_publisher_node')
-        self.get_logger().info("HackRF Publisher Node starting...")
+        super().__init__('hackrf_node')
+        self.get_logger().info("HackRF Node starting...")
 
         self._hackrf = None
         self.is_hackrf_streaming = False
@@ -38,7 +43,7 @@ class HackRFPuiblisherNode(Node):
         self._redis_queue = queue.Queue(maxsize=64)  # D-01: Phase 3 Redis consumer (stub)
         self._stop_event = threading.Event()         # deadlock guard — RX-05
 
-        # New Plan 02: reconnect loop state
+        # Reconnect loop state
         self._device_lock = threading.RLock()
         self._reconnect_delay = _MIN_RECONNECT_DELAY
         self._reconnect_timer = None
@@ -158,10 +163,22 @@ class HackRFPuiblisherNode(Node):
         self._hackrf.amplifier_on = bool(self._last_params['amp_enabled'])
 
     def _on_parameter_event(self, params):
-        """Validate and store parameter updates; reconfigure device if needed."""
+        """Validate and store parameter updates; reconfigure device if needed. (RX-03)"""
         results = []
         needs_reconfig = False
         for param in params:
+            if param.name in PARAM_RANGES:
+                lo, hi = PARAM_RANGES[param.name]
+                if not (lo <= param.value <= hi):
+                    self.get_logger().warning(
+                        f"Parameter '{param.name}' value {param.value} rejected: "
+                        f"outside hardware range [{lo}, {hi}]"
+                    )
+                    results.append(SetParametersResult(
+                        successful=False,
+                        reason=f"{param.name} value {param.value} outside [{lo}, {hi}]"
+                    ))
+                    continue
             self.get_logger().info(f"Parameter '{param.name}' set to: {param.value}")
             if param.name in self._last_params:
                 self._last_params[param.name] = param.value
@@ -278,7 +295,7 @@ class HackRFPuiblisherNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = HackRFPuiblisherNode()
+    node = HackRFNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
