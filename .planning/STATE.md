@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: executing
-stopped_at: Completed 05-pymayhem-refactor 05-05-PLAN.md
-last_updated: "2026-03-30T16:11:43.963Z"
+milestone: v2.0
+milestone_name: Hardening, Observability & Signal Capabilities
+status: defining_requirements
+stopped_at: Milestone v2.0 started — defining requirements
+last_updated: "2026-03-30T17:00:00.000Z"
 last_activity: 2026-03-30
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 15
-  completed_plans: 15
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-29)
 
 **Core value:** Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX operations gated behind explicit authorization.
-**Current focus:** Phase 05 — pymayhem-refactor
+**Current focus:** Milestone v2.0 — Defining requirements
 
 ## Current Position
 
-Phase: 05
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-03-30
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-30 — Milestone v2.0 started
 
 Progress: [░░░░░░░░░░] 0%
 

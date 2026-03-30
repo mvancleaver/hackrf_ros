@@ -37,7 +37,21 @@ Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX 
 
 ### Active
 
-(All v1 requirements validated)
+## Current Milestone: v2.0 Hardening, Observability & Signal Capabilities
+
+**Goal:** Make the driver production-reliable with proper error handling, add operational observability, then extend with IQ recording, spectral analysis, frequency hopping, and async pymayhem.
+
+**Target features:**
+- Custom exceptions and input validation across pymayhem and hackrf_driver
+- Device health watchdog and IQ sequence numbers
+- Redis reconnection in BridgeNode, antenna confirmation ROS2 service
+- Observability metrics published to Redis
+- Dead-letter queue, TX dry-run validation
+- Legacy HackRFNode cleanup and documentation
+- IQ recording to SigMF/raw files
+- Headless spectral analysis (FFT + waterfall) to Redis and /hackrf/spectrum ROS2 topic
+- Programmable frequency hopping scheduler
+- pymayhem async API (asyncio)
 
 ### Out of Scope
 
@@ -91,4 +105,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-30 after Phase 5 completion — all 5 phases complete, v1.0 milestone done*
+*Last updated: 2026-03-30 — Milestone v2.0 started*
