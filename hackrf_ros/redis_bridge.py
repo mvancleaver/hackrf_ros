@@ -17,6 +17,32 @@ import threading
 import numpy as np
 import redis
 
+from hackrf_ros.tx_controller import TXController, TXBlockedError, TXFreqBlockedError, TXNotAuthorizedError  # noqa: F401
+
+
+def _handle_start_tx(node, cmd):
+    """Start TX: read IQ from Redis, validate, call TXController.start_tx (TX-07, D-12)."""
+    freq_hz = int(cmd.get('freq_hz', 0))
+    auth_token = cmd.get('auth_token', '')
+    txvga_gain = int(cmd.get('txvga_gain', 0))
+    iq_data_key = cmd.get('iq_data_key', TXController.IQ_DATA_KEY)
+    # Read IQ bytes from Redis key (bridge has access via node._redis_bridge._redis)
+    redis_client = node._redis_bridge._redis
+    iq_bytes = redis_client.get(iq_data_key) or b''
+    try:
+        node._tx_controller.start_tx(freq_hz, auth_token, bytes(iq_bytes), txvga_gain)
+    except TXBlockedError as e:
+        node.get_logger().warning(f'TX BLOCKED (antenna not confirmed): {e}')
+    except TXFreqBlockedError as e:
+        node.get_logger().warning(f'TX BLOCKED (restricted frequency {freq_hz} Hz): {e}')
+    except TXNotAuthorizedError as e:
+        node.get_logger().warning(f'TX BLOCKED (no valid auth token): {e}')
+
+
+def _handle_stop_tx(node, cmd):
+    """Stop TX and resume RX (TX-07, D-12)."""
+    node._tx_controller.stop_tx()
+
 
 # Module-level command handler dispatch table (D-06)
 _COMMAND_HANDLERS = {
@@ -29,6 +55,8 @@ _COMMAND_HANDLERS = {
     'serial_setfreq':  lambda node, p: node._mayhem.setfreq(int(p['freq_hz'])),
     'start_rx':        lambda node, p: node._start_rx_if_stopped(),
     'stop_rx':         lambda node, p: node._stop_rx_if_running(),
+    'start_tx':        _handle_start_tx,
+    'stop_tx':         _handle_stop_tx,
 }
 
 
