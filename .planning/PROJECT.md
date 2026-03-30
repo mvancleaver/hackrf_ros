@@ -23,11 +23,12 @@ Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX 
 - v Mayhem app management: ROS2 services for app switching, frequency control, and radioinfo queries — Phase 2
 - v Mode coexistence: empirical verification of pyhackrf2 + Mayhem serial concurrent operation — Phase 2
 
+- v Redis IQ publishing: RedisBridge daemon thread streams float32 IQ to hackrf:iq:stream with configurable MAXLEN — Phase 3
+- v Redis device state: hackrf:state hash with config, streaming status, and Mayhem state updated on change — Phase 3
+- v Redis command interface: JSON commands via hackrf:cmd stream dispatched to 9 action handlers — Phase 3
+
 ### Active
 
-- [ ] Redis IQ publishing: stream raw IQ samples to Redis on the host
-- [ ] Redis device state: publish device configuration and status (frequency, gain, streaming state) to Redis
-- [ ] Redis command interface: control HackRF configuration (frequency, gain, sample rate, bandwidth) via Redis
 - [ ] TX capability: transmit signals via Mayhem firmware with configurable parameters
 - [ ] TX authorization guardrails: TX commands require explicit authorization before execution
 
@@ -83,4 +84,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-30 after Phase 2 completion*
+*Last updated: 2026-03-30 after Phase 3 completion*
