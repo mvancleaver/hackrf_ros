@@ -10,11 +10,11 @@ Requirements for initial release. Each maps to roadmap phases.
 ### RX Pipeline
 
 - [x] **RX-01**: IQ sample buffer uses thread-safe queue (queue.Queue) replacing shared numpy array
-- [ ] **RX-02**: USB error recovery with exponential backoff reconnection when device disconnects
+- [x] **RX-02**: USB error recovery with exponential backoff reconnection when device disconnects
 - [ ] **RX-03**: Parameter validation enforces hardware ranges (freq: 1 MHz-6 GHz, LNA gain: 0-40 dB, VGA gain: 0-62 dB, sample rate: 2-20 MSPS)
 - [ ] **RX-04**: Class renamed from HackRFPuiblisherNode to HackRFNode with structured logging (no bare print statements)
-- [ ] **RX-05**: stop_rx() deadlock mitigated with timeout guard during parameter reconfiguration
-- [ ] **RX-06**: Clean lifecycle management: startup initializes device, shutdown stops streaming and closes device
+- [x] **RX-05**: stop_rx() deadlock mitigated with timeout guard during parameter reconfiguration
+- [x] **RX-06**: Clean lifecycle management: startup initializes device, shutdown stops streaming and closes device
 - [x] **RX-07**: RX callback stripped to bare enqueue operation to minimize GIL contention
 
 ### Redis Integration
@@ -83,11 +83,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | RX-01 | Phase 1 | Complete |
-| RX-02 | Phase 1 | Pending |
+| RX-02 | Phase 1 | Complete |
 | RX-03 | Phase 1 | Pending |
 | RX-04 | Phase 1 | Pending |
-| RX-05 | Phase 1 | Pending |
-| RX-06 | Phase 1 | Pending |
+| RX-05 | Phase 1 | Complete |
+| RX-06 | Phase 1 | Complete |
 | RX-07 | Phase 1 | Complete |
 | MAY-01 | Phase 2 | Pending |
 | MAY-02 | Phase 2 | Pending |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-rx-pipeline-correctness-01-PLAN.md
-last_updated: "2026-03-30T03:53:23.552Z"
+stopped_at: Completed 01-rx-pipeline-correctness-02-PLAN.md
+last_updated: "2026-03-30T03:57:54.799Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 ## Current Position
 
 Phase: 01 (rx-pipeline-correctness) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-03-30
 
@@ -53,6 +53,7 @@ Progress: [░░░░░░░░░░] 0%
 
 *Updated after each plan completion*
 | Phase 01-rx-pipeline-correctness P01 | 2min | 1 tasks | 1 files |
+| Phase 01-rx-pipeline-correctness P02 | 2min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,7 @@ Recent decisions affecting current work:
 
 - (pre-execution)
 - [Phase 01-rx-pipeline-correctness]: Dual queue.Queue(maxsize=64) replace shared numpy buffer; drop-oldest overflow; bool return from _rx_callback; topic renamed to /hackrf/iq; CHUNK_IQ_PAIRS=2048 constant (Plan 01-01)
+- [Phase 01-rx-pipeline-correctness]: _device_lock (RLock) serialises stop/start; _last_params dict restores params on reconnect; exponential backoff 1-30s; destroy_node cancels timer before touching device (Plan 01-02)
 
 ### Pending Todos
 
@@ -75,6 +77,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T03:53:23.549Z
-Stopped at: Completed 01-rx-pipeline-correctness-01-PLAN.md
+Last session: 2026-03-30T03:57:54.796Z
+Stopped at: Completed 01-rx-pipeline-correctness-02-PLAN.md
 Resume file: None
