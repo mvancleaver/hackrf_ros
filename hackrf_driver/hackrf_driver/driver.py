@@ -84,6 +84,12 @@ class HackRFDriver:
         self._reconnect_delay = _MIN_RECONNECT_DELAY
         self._reconnect_timer = None
 
+        # REL-01 / D-01: watchdog state — lock-free stall detection
+        # _last_rx_time: float write is effectively atomic under CPython GIL (Open Question 1)
+        self._last_rx_time: float = time.monotonic()  # Pitfall 3: init to now
+        self._watchdog_queue: queue.Queue = queue.Queue(maxsize=1)  # Pitfall 1: maxsize=1
+        self._watchdog_reconnects: int = 0  # D-03: metric counter
+
         # D-07: _last_params mirrors HackRFNode pattern
         self._last_params = {
             'center_frequency': float(config.get('center_frequency', 2447e6)),
@@ -141,6 +147,15 @@ class HackRFDriver:
 
         # --- Attempt pyhackrf2 connection ---
         self._try_connect()
+
+        # --- Watchdog daemon thread (REL-01 / D-01) ---
+        # Started AFTER _try_connect() but BEFORE _iq_thread so _last_rx_time is valid
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            daemon=True,
+            name='hackrf_watchdog',
+        )
+        self._watchdog_thread.start()
 
         # --- IQ publish daemon thread ---
         self._iq_thread = threading.Thread(
@@ -254,6 +269,7 @@ class HackRFDriver:
                 self._hackrf.start_rx(self._rx_callback)
                 self.is_hackrf_streaming = True
                 self._reconnect_delay = _MIN_RECONNECT_DELAY
+                self._last_rx_time = time.monotonic()  # Pitfall 3: reset stall timer on reconnect
                 self._logger.info('HackRF connected and streaming.')
         except (RuntimeError, OSError) as e:
             self._logger.error(
@@ -373,6 +389,8 @@ class HackRFDriver:
 
     def _rx_callback(self, data: bytes) -> bool:
         """Bare enqueue — no numpy, no processing. Per D-05 / RX-07."""
+        # REL-01 / D-02: update stall timer — float write is atomic under CPython GIL
+        self._last_rx_time = time.monotonic()
         chunk = bytes(data)
         for q in (self._ros_queue, self._redis_queue):
             try:
@@ -389,9 +407,10 @@ class HackRFDriver:
         return self._stop_event.is_set()
 
     def _iq_publish_loop(self) -> None:
-        """Daemon thread: drain _ros_queue and discard (bridge handles Redis XADD)."""
+        """Daemon thread: drain _ros_queue and check watchdog correction queue."""
         while not self._stop_event.is_set():
             self._publish_iq()
+            self._drain_watchdog_queue()  # REL-01 / D-01: drain correction queue
             time.sleep(0.005)
 
     def _publish_iq(self) -> None:
@@ -408,6 +427,47 @@ class HackRFDriver:
                 self._ros_queue.get_nowait()
         except queue.Empty:
             pass
+
+    def _watchdog_loop(self) -> None:
+        """Daemon thread: detect IQ stall and post reconnect request (REL-01 / D-01).
+
+        Checks every 10s whether IQ data has been received recently.
+        If not streaming or stale <= 10s, does nothing.
+        Posts 'reconnect' to _watchdog_queue (maxsize=1) on stall detection.
+        Never acquires _device_lock — lock-free detection per D-01.
+        """
+        while not self._stop_event.is_set():
+            self._stop_event.wait(10.0)  # 10s check interval per D-02
+            if self._stop_event.is_set():
+                break
+            if not self.is_hackrf_streaming:
+                continue
+            stale = time.monotonic() - self._last_rx_time
+            if stale > 10.0:
+                self._logger.warning(
+                    f'Watchdog: no IQ data for {stale:.1f}s — posting reconnect request.'
+                )
+                try:
+                    self._watchdog_queue.put_nowait('reconnect')
+                except queue.Full:
+                    pass  # previous request not yet drained — that's fine
+
+    def _drain_watchdog_queue(self) -> None:
+        """Drain watchdog correction queue — called from _iq_publish_loop (D-01).
+
+        Checks _stop_event first to prevent reconnect during shutdown (Pitfall 2).
+        If a reconnect token is present, increments _watchdog_reconnects and
+        calls _try_connect() under existing _device_lock semantics.
+        """
+        if self._stop_event.is_set():
+            return  # Pitfall 2: no reconnect during shutdown
+        try:
+            self._watchdog_queue.get_nowait()
+        except queue.Empty:
+            return
+        self._logger.info('Watchdog: triggering reconnect via _try_connect().')
+        self._watchdog_reconnects += 1
+        self._try_connect()
 
     # ------------------------------------------------------------------
     # RX control (same method names as HackRFNode for dispatch compatibility)
