@@ -65,6 +65,7 @@ class MayhemSerial:
         self._response_queue: queue.Queue[str] = queue.Queue()
         self._reader_thread: threading.Thread | None = None
         self._known_apps: list[str] = []
+        self._active_app: str = ''
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -225,7 +226,10 @@ class MayhemSerial:
             True if command accepted, False if response contains 'error'.
         """
         lines = self._send_command(f'appstart {short_name}')
-        return not any('error' in l.lower() for l in lines)
+        ok = not any('error' in l.lower() for l in lines)
+        if ok:
+            self._active_app = short_name
+        return ok
 
     def setfreq(self, freq_hz: int) -> bool:
         """Set the active app's frequency.
