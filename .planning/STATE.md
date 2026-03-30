@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-pymayhem-refactor 05-02-PLAN.md
-last_updated: "2026-03-30T09:23:33.309Z"
+stopped_at: Completed 05-pymayhem-refactor 05-03-PLAN.md
+last_updated: "2026-03-30T09:33:03.568Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 15
-  completed_plans: 12
+  completed_plans: 13
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 ## Current Position
 
 Phase: 05 (pymayhem-refactor) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-03-30
 
@@ -65,6 +65,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-tx-authorization P02 | 10min | 3 tasks | 2 files |
 | Phase 05-pymayhem-refactor P01 | 6min | 2 tasks | 14 files |
 | Phase 05-pymayhem-refactor P02 | 7min | 2 tasks | 10 files |
+| Phase 05-pymayhem-refactor P03 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,8 @@ Recent decisions affecting current work:
 - [Phase 05-pymayhem-refactor]: setup.cfg added alongside pyproject.toml for legacy editable install compatibility with system pip 22.0.2; UnsafeMayhemClient methods return raw list[str] for dangerous commands (caller controls error handling)
 - [Phase 05-pymayhem-refactor]: TXController takes hackrf_getter Callable, device_lock RLock, stop_rx_fn, start_rx_fn, freq_filter_enabled bool — no rclpy node reference
 - [Phase 05-pymayhem-refactor]: D-14 implemented: xadd returns entry_id, then redis.publish('hackrf:iq:notify', entry_id) in _xadd_iq()
+- [Phase 05-pymayhem-refactor]: HackRFDriver uses threading.Event stop gate and threading.Timer reconnect — no rclpy dependency
+- [Phase 05-pymayhem-refactor]: TXController wired with primitive callables: hackrf_getter lambda, device_lock, stop_rx_fn, start_rx_fn replacing HackRFNode node reference
 
 ### Pending Todos
 
@@ -107,6 +110,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T09:23:33.305Z
-Stopped at: Completed 05-pymayhem-refactor 05-02-PLAN.md
+Last session: 2026-03-30T09:33:03.564Z
+Stopped at: Completed 05-pymayhem-refactor 05-03-PLAN.md
 Resume file: None

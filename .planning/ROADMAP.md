@@ -109,6 +109,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 Plans:
 - [x] 05-01-PLAN.md — Extract pymayhem package: _serial.py, domain modules, MayhemClient, UnsafeMayhemClient, pyproject.toml, 12 tests (REF-01, REF-02, REF-03)
 - [x] 05-02-PLAN.md — hackrf_driver scaffold: config.py, move RedisBridge + TXController, decouple TXController from node ref, 36 tests (REF-04, REF-07)
-- [ ] 05-03-PLAN.md — HackRFDriver main loop: driver.py, cli.py, __main__.py, threading replaces ROS2 timers (REF-04)
+- [x] 05-03-PLAN.md — HackRFDriver main loop: driver.py, cli.py, __main__.py, threading replaces ROS2 timers (REF-04)
 - [ ] 05-04-PLAN.md — ROS2 bridge node: bridge_node.py reads Redis Pub/Sub, publishes /hackrf/iq and /hackrf/state (REF-05, REF-06)
 - [ ] 05-05-PLAN.md — Test migration: update test/ imports to new package homes, full 68-test regression check (REF-07)
