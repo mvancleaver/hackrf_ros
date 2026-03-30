@@ -117,6 +117,7 @@ class TXController:
 
         self._antenna_confirmed: bool = False
         self._is_transmitting: bool = False
+        self._last_tx_freq: int = 0  # last transmitted frequency (for state dict)
         # TX cannot re-enter itself — use Lock not RLock
         self._tx_lock = threading.Lock()
 
@@ -210,6 +211,7 @@ class TXController:
 
         # All guards passed — execute TX
         with self._tx_lock:
+            self._last_tx_freq = freq_hz  # record for state dict
             self._node._stop_rx_if_running()
             time.sleep(0.1)  # firmware settle per libhackrf #916
 

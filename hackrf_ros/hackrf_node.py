@@ -13,6 +13,7 @@ from std_srvs.srv import Trigger
 from hackrf_ros_interfaces.srv import AppStart, SetFreq
 from hackrf_ros.mayhem_serial import MayhemSerial
 from hackrf_ros.redis_bridge import RedisBridge
+from hackrf_ros.tx_controller import TXController, TXBlockedError, TXFreqBlockedError, TXNotAuthorizedError  # noqa: F401
 
 import pyhackrf2  # The Python binding for libhackrf
 import numpy as np
@@ -129,11 +130,25 @@ class HackRFNode(Node):
             'redis_stream_maxlen', 10000,
             ParameterDescriptor(description='Redis Stream MAXLEN for hackrf:iq:stream (D-04)')
         )
+        self.declare_parameter(
+            'tx_freq_filter_enabled', True,
+            ParameterDescriptor(description='Enable TX frequency allowlist (D-05, TX-02/TX-03)')
+        )
+        self.declare_parameter(
+            'tx_skip_antenna_check', False,
+            ParameterDescriptor(description='Skip antenna confirmation for automated testing (D-08, TX-04)')
+        )
         _maxlen = self.get_parameter('redis_stream_maxlen').get_parameter_value().integer_value
         self._redis_bridge = RedisBridge(
             self._redis_queue, self, self.get_logger(), maxlen=_maxlen
         )
         self._redis_bridge.open()   # D-02: returns False if Redis unreachable — node continues
+
+        # --- Phase 4: TXController (TX-01 through TX-06) ---
+        self._tx_controller = TXController(
+            self, self._redis_bridge._redis, self.get_logger()
+        )
+        self._tx_controller.open()  # reads antenna confirmed flag, filter param
 
         # --- 3. Create ROS 2 Publisher ---
         qos_profile = QoSProfile(
@@ -361,6 +376,9 @@ class HackRFNode(Node):
             'active_app':       getattr(self._mayhem, '_active_app', ''),
             'discovered_apps':  json.dumps(getattr(self._mayhem, '_known_apps', [])),
             'serial_connected': self._serial_connected,
+            'is_transmitting':  hasattr(self, '_tx_controller') and self._tx_controller._is_transmitting,
+            'tx_freq':          getattr(self._tx_controller, '_last_tx_freq', 0) if hasattr(self, '_tx_controller') else 0,
+            'antenna_confirmed': getattr(self._tx_controller, '_antenna_confirmed', False) if hasattr(self, '_tx_controller') else False,
         }
 
     def _set_center_frequency(self, freq_hz: float) -> None:
@@ -554,7 +572,11 @@ class HackRFNode(Node):
     def destroy_node(self) -> None:
         """Stop streaming, close device, cancel timers. (RX-06)"""
         self.get_logger().info("HackRFNode shutting down...")
-        # Close RedisBridge FIRST — before serial or pyhackrf2 (D-11 / CONTEXT.md)
+        # TX-06: Stop TX FIRST — before Redis, serial, or pyhackrf2
+        if hasattr(self, '_tx_controller'):
+            self._tx_controller.stop()
+            self.get_logger().info("TXController stopped.")
+        # Close RedisBridge FIRST of the rest (existing D-11 comment)
         if hasattr(self, '_redis_bridge'):
             self._redis_bridge.close()
             self.get_logger().info("RedisBridge closed.")
