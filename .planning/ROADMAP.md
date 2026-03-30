@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: RX Pipeline Correctness** - Fix thread-safety bugs and add error recovery to the existing IQ pipeline
 - [ ] **Phase 2: Mayhem Serial Interface** - Build serial control for Mayhem firmware and resolve the mode-conflict question
-- [ ] **Phase 3: Redis Bridge** - Stream IQ data and device state to Redis; accept control commands via Redis
+- [x] **Phase 3: Redis Bridge** - Stream IQ data and device state to Redis; accept control commands via Redis (completed 2026-03-30)
 - [ ] **Phase 4: TX Authorization** - Add safe, authorized transmission with frequency allowlist and hardware guardrails
 
 ## Phase Details
@@ -64,7 +64,7 @@ Plans:
 
 Plans:
 - [x] 03-01-PLAN.md — RedisBridge class with TDD, package config (RED-01, RED-04, RED-05)
-- [ ] 03-02-PLAN.md — Wire RedisBridge into HackRFNode; MayhemSerial _active_app; state/command integration (RED-02, RED-03, RED-04, RED-05)
+- [x] 03-02-PLAN.md — Wire RedisBridge into HackRFNode; MayhemSerial _active_app; state/command integration (RED-02, RED-03, RED-04, RED-05)
 
 ### Phase 4: TX Authorization
 **Goal**: The driver can transmit signals via pyhackrf2, gated behind one-token-per-TX authorization, a frequency allowlist, and an explicit antenna confirmation
@@ -86,5 +86,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. RX Pipeline Correctness | 0/3 | In progress | - |
 | 2. Mayhem Serial Interface | 0/3 | Not started | - |
-| 3. Redis Bridge | 1/2 | In Progress|  |
+| 3. Redis Bridge | 2/2 | Complete   | 2026-03-30 |
 | 4. TX Authorization | 0/? | Not started | - |

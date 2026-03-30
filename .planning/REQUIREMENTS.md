@@ -20,8 +20,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Redis Integration
 
 - [x] **RED-01**: IQ samples published to Redis Stream via XADD with configurable MAXLEN trimming
-- [ ] **RED-02**: Device state published to Redis Hash (hackrf:state) with current frequency, gain, sample rate, streaming status
-- [ ] **RED-03**: Command interface via Redis subscriber (hackrf:cmd) accepts frequency, gain, sample rate, and bandwidth changes
+- [x] **RED-02**: Device state published to Redis Hash (hackrf:state) with current frequency, gain, sample rate, streaming status
+- [x] **RED-03**: Command interface via Redis subscriber (hackrf:cmd) accepts frequency, gain, sample rate, and bandwidth changes
 - [x] **RED-04**: Redis I/O runs in dedicated daemon thread, never blocking ROS2 executor callbacks
 - [x] **RED-05**: Redis key schema uses hackrf: namespace prefix consistently
 
@@ -96,8 +96,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MAY-05 | Phase 2 | Complete |
 | MAY-06 | Phase 2 | Complete |
 | RED-01 | Phase 3 | Complete |
-| RED-02 | Phase 3 | Pending |
-| RED-03 | Phase 3 | Pending |
+| RED-02 | Phase 3 | Complete |
+| RED-03 | Phase 3 | Complete |
 | RED-04 | Phase 3 | Complete |
 | RED-05 | Phase 3 | Complete |
 | TX-01 | Phase 4 | Pending |
