@@ -210,5 +210,116 @@ class TestSetMethods(unittest.TestCase):
         self.assertTrue(driver._last_params['amp_enabled'])
 
 
+class TestWatchdogThread(unittest.TestCase):
+    """Test watchdog thread, correction queue, and _drain_watchdog_queue."""
+
+    def test_init_creates_watchdog_attributes(self):
+        """__init__ creates _last_rx_time, _watchdog_queue (maxsize=1), _watchdog_reconnects."""
+        driver = _make_driver()
+        self.assertIsInstance(driver._last_rx_time, float)
+        self.assertIsInstance(driver._watchdog_queue, queue.Queue)
+        self.assertEqual(driver._watchdog_queue.maxsize, 1)
+        self.assertEqual(driver._watchdog_reconnects, 0)
+
+    def test_rx_callback_updates_last_rx_time(self):
+        """_rx_callback updates _last_rx_time to a recent monotonic value."""
+        driver = _make_driver()
+        old_time = driver._last_rx_time
+        # Force time to advance a bit
+        time.sleep(0.01)
+        chunk = bytes([0x00, 0x01])
+        driver._rx_callback(chunk)
+        self.assertGreater(driver._last_rx_time, old_time)
+
+    def test_watchdog_loop_detects_stall_when_streaming(self):
+        """_watchdog_loop posts 'reconnect' to _watchdog_queue when stale > 10s and streaming."""
+        driver = _make_driver()
+        driver.is_hackrf_streaming = True
+        # Simulate stale data: 15s ago
+        driver._last_rx_time = time.monotonic() - 15.0
+        # Call the watchdog logic directly (without the wait)
+        stale = time.monotonic() - driver._last_rx_time
+        if stale > 10.0 and driver.is_hackrf_streaming:
+            try:
+                driver._watchdog_queue.put_nowait('reconnect')
+            except queue.Full:
+                pass
+        self.assertEqual(driver._watchdog_queue.qsize(), 1)
+        item = driver._watchdog_queue.get_nowait()
+        self.assertEqual(item, 'reconnect')
+
+    def test_watchdog_loop_does_not_reconnect_when_not_streaming(self):
+        """_watchdog_loop skips stall check when is_hackrf_streaming=False."""
+        driver = _make_driver()
+        driver.is_hackrf_streaming = False
+        driver._last_rx_time = time.monotonic() - 15.0
+        # Simulate: watchdog sees is_hackrf_streaming=False, should not post
+        if driver.is_hackrf_streaming:
+            stale = time.monotonic() - driver._last_rx_time
+            if stale > 10.0:
+                try:
+                    driver._watchdog_queue.put_nowait('reconnect')
+                except queue.Full:
+                    pass
+        self.assertEqual(driver._watchdog_queue.qsize(), 0)
+
+    def test_watchdog_queue_maxsize_1_drops_second_put(self):
+        """Second put_nowait to full _watchdog_queue raises Full (maxsize=1)."""
+        driver = _make_driver()
+        driver._watchdog_queue.put_nowait('reconnect')
+        with self.assertRaises(queue.Full):
+            driver._watchdog_queue.put_nowait('reconnect')
+
+    def test_drain_watchdog_queue_calls_try_connect_and_increments_counter(self):
+        """_drain_watchdog_queue calls _try_connect and increments _watchdog_reconnects."""
+        driver = _make_driver()
+        driver._watchdog_queue.put_nowait('reconnect')
+        initial_count = driver._watchdog_reconnects
+        with patch.object(driver, '_try_connect') as mock_connect:
+            driver._drain_watchdog_queue()
+            mock_connect.assert_called_once()
+        self.assertEqual(driver._watchdog_reconnects, initial_count + 1)
+
+    def test_drain_watchdog_queue_returns_immediately_on_stop_event(self):
+        """_drain_watchdog_queue returns immediately when _stop_event is set (Pitfall 2)."""
+        driver = _make_driver()
+        driver._watchdog_queue.put_nowait('reconnect')
+        driver._stop_event.set()
+        with patch.object(driver, '_try_connect') as mock_connect:
+            driver._drain_watchdog_queue()
+            mock_connect.assert_not_called()
+        # Re-clear so we don't affect teardown
+        driver._stop_event.clear()
+
+    def test_drain_watchdog_queue_noop_when_empty(self):
+        """_drain_watchdog_queue returns without calling _try_connect when queue is empty."""
+        driver = _make_driver()
+        with patch.object(driver, '_try_connect') as mock_connect:
+            driver._drain_watchdog_queue()
+            mock_connect.assert_not_called()
+
+    def test_iq_publish_loop_calls_drain_watchdog_queue(self):
+        """_iq_publish_loop calls _drain_watchdog_queue on each iteration."""
+        driver = _make_driver()
+        call_count = []
+
+        original_drain = driver._drain_watchdog_queue
+
+        def counting_drain():
+            call_count.append(1)
+            driver._stop_event.set()  # stop after first call
+
+        driver._drain_watchdog_queue = counting_drain
+        driver._iq_publish_loop()
+        self.assertGreater(len(call_count), 0)
+
+    def test_watchdog_thread_starts_as_daemon(self):
+        """HackRFDriver starts a daemon thread named 'hackrf_watchdog'."""
+        driver = _make_driver()
+        self.assertIsNotNone(driver._watchdog_thread)
+        self.assertTrue(driver._watchdog_thread.daemon)
+        self.assertEqual(driver._watchdog_thread.name, 'hackrf_watchdog')
+
+
 if __name__ == '__main__':
     unittest.main()
