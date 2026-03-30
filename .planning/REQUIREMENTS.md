@@ -69,7 +69,7 @@ Requirements for v2.0: Hardening, Observability & Signal Capabilities.
 ### Reliability
 
 - [ ] **REL-01**: Device health watchdog detects USB stall (no RX data for 10s) and triggers automatic reconnect without deadlocking _device_lock
-- [ ] **REL-02**: BridgeNode survives Redis restart — exponential backoff retry loop with automatic resubscribe to Pub/Sub channels
+- [x] **REL-02**: BridgeNode survives Redis restart — exponential backoff retry loop with automatic resubscribe to Pub/Sub channels
 - [ ] **REL-03**: Every IQ XADD entry includes a monotonic sequence number; consumers can detect dropped buffers
 
 ### Observability
@@ -81,7 +81,7 @@ Requirements for v2.0: Hardening, Observability & Signal Capabilities.
 ### TX Safety
 
 - [ ] **TXS-01**: validate_tx() checks all four TX guards (antenna, hard-block, freq filter, auth existence) without consuming the auth token
-- [ ] **TXS-02**: BridgeNode exposes /hackrf/confirm_antenna ROS2 service that sets the Redis antenna confirmation key
+- [x] **TXS-02**: BridgeNode exposes /hackrf/confirm_antenna ROS2 service that sets the Redis antenna confirmation key
 - [ ] **TXS-03**: TXController periodically re-reads antenna confirmation key (not just at init)
 
 ### IQ Recording
@@ -107,7 +107,7 @@ Requirements for v2.0: Hardening, Observability & Signal Capabilities.
 
 ### Legacy Cleanup
 
-- [ ] **LEG-01**: HackRFNode marked deprecated with docstring and log warning pointing users to hackrf_driver + BridgeNode
+- [x] **LEG-01**: HackRFNode marked deprecated with docstring and log warning pointing users to hackrf_driver + BridgeNode
 
 ## v3 Requirements
 
@@ -187,12 +187,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ERR-03 | Phase 6 | Complete |
 | ERR-04 | Phase 6 | Pending |
 | ERR-05 | Phase 6 | Pending |
-| REL-02 | Phase 6 | Pending |
+| REL-02 | Phase 6 | Complete |
 | REL-03 | Phase 6 | Pending |
 | TXS-01 | Phase 6 | Pending |
-| TXS-02 | Phase 6 | Pending |
+| TXS-02 | Phase 6 | Complete |
 | TXS-03 | Phase 6 | Pending |
-| LEG-01 | Phase 6 | Pending |
+| LEG-01 | Phase 6 | Complete |
 | REL-01 | Phase 7 | Pending |
 | OBS-01 | Phase 7 | Pending |
 | OBS-02 | Phase 7 | Pending |

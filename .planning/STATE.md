@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-01-PLAN.md
-last_updated: "2026-03-30T22:07:41.935Z"
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-03-30T22:12:40.283Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 19
-  completed_plans: 16
+  completed_plans: 17
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-03-30)
 ## Current Position
 
 Phase: 06 (foundation-hardening) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-03-30
 
@@ -69,6 +69,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-pymayhem-refactor P04 | 4min | 3 tasks | 4 files |
 | Phase 05-pymayhem-refactor P05 | 25min | 1 tasks | 6 files |
 | Phase 06-foundation-hardening P01 | 3min | 2 tasks | 6 files |
+| Phase 06-foundation-hardening P03 | 525555min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,8 @@ Recent decisions affecting current work:
 - [Phase 05-pymayhem-refactor]: pymayhem/tests/__init__.py removed to fix pytest collection from workspace root
 - [Phase 06-foundation-hardening]: TX exceptions reparented under HackRFError via new exceptions.py; re-exported from tx_controller for backward compatibility
 - [Phase 06-foundation-hardening]: pymayhem domain bool returns converted to raise MayhemCommandError; appstart_with_reconnect keeps bool return (reconnect timeout, not command error)
+- [Phase 06-foundation-hardening]: D-07: exponential backoff 1s-30s in BridgeNode reconnect loop; _stop_event.wait(backoff) makes shutdown responsive
+- [Phase 06-foundation-hardening]: _run_pubsub_loop raises on Redis error (no try/except) so outer loop catches and reconnects; _publish_state() flushed immediately after successful subscribe
 
 ### Pending Todos
 
@@ -121,6 +124,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-30T22:07:41.931Z
-Stopped at: Completed 06-01-PLAN.md
+Last session: 2026-03-30T22:12:40.280Z
+Stopped at: Completed 06-03-PLAN.md
 Resume file: None
