@@ -27,10 +27,12 @@ Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX 
 - v Redis device state: hackrf:state hash with config, streaming status, and Mayhem state updated on change — Phase 3
 - v Redis command interface: JSON commands via hackrf:cmd stream dispatched to 9 action handlers — Phase 3
 
+- v TX capability: TXController with pyhackrf2 start_tx(), buffer-based TX, float32->int8 conversion, half-duplex RX pause/resume — Phase 4
+- v TX authorization guardrails: one-token-per-TX via Lua GETDEL, frequency allowlist with ALWAYS_BLOCKED (EPIRB/ADS-B), per-session antenna confirmation, TX stop on shutdown — Phase 4
+
 ### Active
 
-- [ ] TX capability: transmit signals via Mayhem firmware with configurable parameters
-- [ ] TX authorization guardrails: TX commands require explicit authorization before execution
+(All v1 requirements validated)
 
 ### Out of Scope
 
@@ -84,4 +86,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-30 after Phase 3 completion*
+*Last updated: 2026-03-30 after Phase 4 completion — all v1 requirements validated*
