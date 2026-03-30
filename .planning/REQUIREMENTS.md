@@ -37,10 +37,10 @@ Requirements for initial release. Each maps to roadmap phases.
 ### TX Control
 
 - [ ] **TX-01**: TX via pyhackrf2 start_tx() with explicit half-duplex RX-to-TX mode switch
-- [ ] **TX-02**: Frequency allowlist blocks transmission on restricted bands (cellular, aviation, emergency)
-- [ ] **TX-03**: Configurable flag to disable frequency allowlist for authorized testing environments
-- [ ] **TX-04**: Antenna confirmation required before any TX operation (explicit user acknowledgment)
-- [ ] **TX-05**: One-token-per-TX authorization via Redis GETDEL (no persistent armed state)
+- [x] **TX-02**: Frequency allowlist blocks transmission on restricted bands (cellular, aviation, emergency)
+- [x] **TX-03**: Configurable flag to disable frequency allowlist for authorized testing environments
+- [x] **TX-04**: Antenna confirmation required before any TX operation (explicit user acknowledgment)
+- [x] **TX-05**: One-token-per-TX authorization via Redis GETDEL (no persistent armed state)
 - [ ] **TX-06**: TX automatically stopped on node shutdown (stop_tx() in destroy_node)
 - [ ] **TX-07**: TX commands routed through Redis command interface with authorization field required
 
@@ -101,10 +101,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RED-04 | Phase 3 | Complete |
 | RED-05 | Phase 3 | Complete |
 | TX-01 | Phase 4 | Pending |
-| TX-02 | Phase 4 | Pending |
-| TX-03 | Phase 4 | Pending |
-| TX-04 | Phase 4 | Pending |
-| TX-05 | Phase 4 | Pending |
+| TX-02 | Phase 4 | Complete |
+| TX-03 | Phase 4 | Complete |
+| TX-04 | Phase 4 | Complete |
+| TX-05 | Phase 4 | Complete |
 | TX-06 | Phase 4 | Pending |
 | TX-07 | Phase 4 | Pending |
 

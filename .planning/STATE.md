@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 4 context gathered
-last_updated: "2026-03-30T06:07:53.637Z"
+status: executing
+stopped_at: Completed 04-01-PLAN.md (TXController guard logic)
+last_updated: "2026-03-30T06:39:39.516Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 10
+  completed_plans: 9
   percent: 0
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-29)
 
 **Core value:** Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX operations gated behind explicit authorization.
-**Current focus:** Phase 03 — redis-bridge
+**Current focus:** Phase 04 — tx-authorization
 
 ## Current Position
 
-Phase: 4
-Plan: Not started
-Status: Phase complete — ready for verification
+Phase: 04 (tx-authorization) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
 Last activity: 2026-03-30
 
 Progress: [░░░░░░░░░░] 0%
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-mayhem-serial-interface P03 | 3min | 2 tasks | 3 files |
 | Phase 03-redis-bridge P01 | 3min | 2 tasks | 4 files |
 | Phase 03-redis-bridge P02 | 8min | 2 tasks | 3 files |
+| Phase 04-tx-authorization P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,7 @@ Recent decisions affecting current work:
 - [Phase 03-redis-bridge]: RedisBridge.close() called FIRST in destroy_node before serial and pyhackrf2 (D-11 / CONTEXT.md requirement)
 - [Phase 03-redis-bridge]: hasattr guard on _redis_bridge calls in _on_parameter_event and _handle_appstart for graceful degradation (D-02)
 - [Phase 03-redis-bridge]: _start_time recorded once in __init__ for stable uptime_s in _build_state_dict
+- [Phase 04-tx-authorization]: ALWAYS_BLOCKED_BANDS checked unconditionally — EPIRB/ADS-B cannot be bypassed; guard order: antenna->hard-block->freq-filter->auth token; Lua GETDEL fallback for Redis 6.0.16; _tx_lock is Lock (not RLock); txvga_gain default=0
 
 ### Pending Todos
 
@@ -93,6 +95,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T06:07:53.633Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-tx-authorization/04-CONTEXT.md
+Last session: 2026-03-30T06:39:39.513Z
+Stopped at: Completed 04-01-PLAN.md (TXController guard logic)
+Resume file: None
