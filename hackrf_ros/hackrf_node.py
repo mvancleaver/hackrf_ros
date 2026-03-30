@@ -18,6 +18,8 @@ import queue
 import threading
 
 CHUNK_IQ_PAIRS = 2048  # D-04: fixed chunk size
+_MIN_RECONNECT_DELAY = 1.0   # D-06: exponential backoff start
+_MAX_RECONNECT_DELAY = 30.0  # D-06: exponential backoff ceiling
 
 
 class HackRFPuiblisherNode(Node):
@@ -27,20 +29,21 @@ class HackRFPuiblisherNode(Node):
     """
 
     def __init__(self):
-        print("DEBUG: Entering HackRFPuiblisherNode __init__")  # DEBUG PRINT
         super().__init__('hackrf_publisher_node')
         self.get_logger().info("HackRF Publisher Node starting...")
-        print("DEBUG: Node super().__init__ called.")  # DEBUG PRINT
 
-        self.hackrf = None
+        self._hackrf = None
         self.is_hackrf_streaming = False
         self._ros_queue = queue.Queue(maxsize=64)    # D-01: ROS2 publisher consumer
         self._redis_queue = queue.Queue(maxsize=64)  # D-01: Phase 3 Redis consumer (stub)
-        self._stop_event = threading.Event()         # deadlock guard — used in Plan 02
+        self._stop_event = threading.Event()         # deadlock guard — RX-05
+
+        # New Plan 02: reconnect loop state
+        self._device_lock = threading.RLock()
+        self._reconnect_delay = _MIN_RECONNECT_DELAY
+        self._reconnect_timer = None
 
         # --- 1. Declare ROS 2 Parameters for HackRF Configuration ---
-        print("DEBUG: Declaring parameters...")  # DEBUG PRINT
-
         # Center Frequency (Hz)
         self.declare_parameter(
             'center_frequency',
@@ -76,7 +79,14 @@ class HackRFPuiblisherNode(Node):
             ParameterDescriptor(description='RF amplifier enabled (true/false)', read_only=False)
         )
 
-        print("DEBUG: Parameters declared.")  # DEBUG PRINT
+        # Populate _last_params from declared parameters (D-07)
+        self._last_params = {
+            'center_frequency': self.get_parameter('center_frequency').get_parameter_value().double_value,
+            'sample_rate': self.get_parameter('sample_rate').get_parameter_value().double_value,
+            'lna_gain': self.get_parameter('lna_gain').get_parameter_value().integer_value,
+            'vga_gain': self.get_parameter('vga_gain').get_parameter_value().integer_value,
+            'amp_enabled': self.get_parameter('amp_enabled').get_parameter_value().bool_value,
+        }
 
         # --- 2. Setup Parameter Event Handler ---
         self.add_on_set_parameters_callback(self._on_parameter_event)
@@ -89,105 +99,115 @@ class HackRFPuiblisherNode(Node):
         )
         self.publisher_ = self.create_publisher(Float32MultiArray, '/hackrf/iq', qos_profile)
         self.get_logger().info("Publisher created on topic '/hackrf/iq' (std_msgs/msg/Float32MultiArray).")
-        print("DEBUG: Publisher created.")  # DEBUG PRINT
 
-# --- 4. Initialize HackRF Device ---
-        print("DEBUG: Attempting to initialize HackRF device...")  # DEBUG PRINT
+        # --- 4. Initialize HackRF Device (via reconnect loop) ---
+        self._try_connect()
+
+        # --- 5. Create a Timer for Data Acquisition (unconditional) ---
+        self.timer_period = 0.005  # seconds
+        self.timer = self.create_timer(self.timer_period, self._publish_iq)
+        self.get_logger().info(f"Data acquisition timer set to {self.timer_period} seconds.")
+
+    def _try_connect(self) -> None:
+        """Attempt to open HackRF. On failure, schedule retry with exponential backoff. (D-06, D-08)"""
         try:
-            self.hackrf = pyhackrf2.HackRF()  # Ensure this is HackRF (capital F)
-            self.get_logger().info("HackRF device opened successfully.")  # ADDED a generic success message
-            print("DEBUG: HackRF device initialized successfully.")  # DEBUG PRINT
-
-            # Apply initial parameters to HackRF
-            print("DEBUG: Calling _configure_hackrf...")  # DEBUG PRINT
-            self._configure_hackrf()  # This call already starts the RX stream
-            print("DEBUG: _configure_hackrf returned.")  # DEBUG PRINT
-
-            # --- 5. Create a Timer for Data Acquisition ---
-            self.timer_period = 0.005  # seconds
-            self.timer = self.create_timer(self.timer_period, self._publish_iq)  # UNCOMMENT THIS
-            self.get_logger().info(f"Data acquisition timer set to {self.timer_period} seconds.")  # UNCOMMENT THIS
-            print("DEBUG: Timer created. Node initialization complete.")  # DEBUG PRINT
-
-        except Exception as e:  # Catching a general Exception as determined from dir(pyhackrf2)
-            self.get_logger().error(f"Failed to initialize HackRF or unexpected error: {e}")
-            self.hackrf = None
+            with self._device_lock:
+                self._hackrf = pyhackrf2.HackRF()
+                self._apply_last_params()
+                self._hackrf.start_rx(self._rx_callback)
+                self.is_hackrf_streaming = True
+                self._reconnect_delay = _MIN_RECONNECT_DELAY  # reset on success
+                self.get_logger().info("HackRF connected and streaming.")
+        except (RuntimeError, OSError) as e:
+            self.get_logger().error(
+                f"HackRF connect failed: {e}. Retrying in {self._reconnect_delay:.0f}s."
+            )
+            self._hackrf = None
             self.is_hackrf_streaming = False
-            self.get_logger().warn("HackRF not connected or failed to initialize. Node will run but not publish data.")
-            print(f"DEBUG: General Exception caught during HackRF init: {e}")  # DEBUG PRINT
+            self._reconnect_timer = self.create_timer(
+                self._reconnect_delay,
+                self._reconnect_callback,
+            )
+            self._reconnect_delay = min(self._reconnect_delay * 2, _MAX_RECONNECT_DELAY)
+        except Exception as e:
+            self.get_logger().error(
+                f"Unexpected error opening HackRF: {e}. Retrying in {self._reconnect_delay:.0f}s.",
+                exc_info=True,
+            )
+            self._hackrf = None
+            self.is_hackrf_streaming = False
+            self._reconnect_timer = self.create_timer(
+                self._reconnect_delay,
+                self._reconnect_callback,
+            )
+            self._reconnect_delay = min(self._reconnect_delay * 2, _MAX_RECONNECT_DELAY)
+
+    def _reconnect_callback(self) -> None:
+        """Timer callback: cancel this timer, attempt reconnect. (D-06)"""
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+            self._reconnect_timer = None
+        self._try_connect()
+
+    def _apply_last_params(self) -> None:
+        """Apply stored parameters to _hackrf device. Called after reconnect. (D-07)"""
+        self._hackrf.center_freq = int(self._last_params['center_frequency'])
+        self._hackrf.sample_rate = int(self._last_params['sample_rate'])
+        self._hackrf.lna_gain = int(self._last_params['lna_gain'])
+        self._hackrf.vga_gain = int(self._last_params['vga_gain'])
+        self._hackrf.amplifier_on = bool(self._last_params['amp_enabled'])
 
     def _on_parameter_event(self, params):
-        """
-        Callback for when ROS 2 parameters are changed.
-        Reconfigures the HackRF device with the new parameters.
-        """
-        successful_results = []  # Renamed for clarity, will hold SetParametersResult objects
+        """Validate and store parameter updates; reconfigure device if needed."""
+        results = []
         needs_reconfig = False
-
         for param in params:
-            self.get_logger().info(f"Parameter '{param.name}' changed to: {param.value}")
-            # Check if this parameter change requires HackRF reconfiguration
-            if param.name in ['center_frequency', 'sample_rate', 'lna_gain', 'vga_gain', 'amp_enabled']:
+            self.get_logger().info(f"Parameter '{param.name}' set to: {param.value}")
+            if param.name in self._last_params:
+                self._last_params[param.name] = param.value
                 needs_reconfig = True
-            # For now, assume all parameter sets are successful
-            successful_results.append(SetParametersResult(successful=True, reason=''))
+            results.append(SetParametersResult(successful=True, reason=''))
+        if needs_reconfig and self._hackrf:
+            self._configure_device()
+        return results
 
-        if needs_reconfig and self.hackrf:
-            self.get_logger().info("Reconfiguring HackRF with updated parameters...")
-            self._configure_hackrf()
-            self.get_logger().info("HackRF reconfigured.")
-
-        return successful_results  # Return a list of SetParametersResult objects
-
-    def _configure_hackrf(self):
-        """
-        Applies the current ROS 2 parameter values to the HackRF device.
-        This function is called during initialization and on parameter changes.
-        """
-        if not self.hackrf:
-            self.get_logger().warn("HackRF device not initialized. Cannot configure.")
+    def _configure_device(self) -> None:
+        """Stop stream, apply _last_params to device, restart stream. Holds _device_lock. (RX-05)"""
+        if not self._hackrf:
+            self.get_logger().warning("_configure_device called but no device connected.")
             return
-
-        try:
-            center_freq = self.get_parameter('center_frequency').get_parameter_value().double_value
-            sample_rate = self.get_parameter('sample_rate').get_parameter_value().double_value
-            lna_gain = self.get_parameter('lna_gain').get_parameter_value().integer_value
-            vga_gain = self.get_parameter('vga_gain').get_parameter_value().integer_value
-            amp_enabled = self.get_parameter('amp_enabled').get_parameter_value().bool_value
-
-            # --- ADD THIS DEBUG PRINT TO CONFIRM READ VALUES ---
-            self.get_logger().info(f"DEBUG_CONFIG_READ: Freq={center_freq}, SR={sample_rate}, LNA={lna_gain}, VGA={vga_gain}, Amp={amp_enabled}")
-            # --- END DEBUG PRINT ---
-
-            self.get_logger().info(f"Attempting to configure HackRF with: Freq={center_freq/1e6:.2f}MHz, "
-                                   f"SR={sample_rate/1e6:.2f}MSPS, LNA={lna_gain}dB, "
-                                   f"VGA={vga_gain}dB, Amp={'ON' if amp_enabled else 'OFF'}")
-
-            # Stop streaming temporarily if already streaming to apply new settings
+        with self._device_lock:
             if self.is_hackrf_streaming:
-                self.hackrf.stop_rx()
+                self._stop_event.set()
+                try:
+                    self._hackrf.stop_rx()
+                    self.is_hackrf_streaming = False
+                    self.get_logger().info("Stopped RX stream for reconfiguration.")
+                except (RuntimeError, OSError) as e:
+                    self.get_logger().warning(f"stop_rx error (non-fatal): {e}")
+                finally:
+                    self._stop_event.clear()
+                time.sleep(0.1)   # Pitfall B: firmware settling (libhackrf issue #916)
+            try:
+                self._apply_last_params()
+                self._hackrf.start_rx(self._rx_callback)
+                self.is_hackrf_streaming = True
+                self._reconnect_delay = _MIN_RECONNECT_DELAY  # reset backoff on successful reconfiguration
+                self.get_logger().info(
+                    f"HackRF reconfigured: freq={self._last_params['center_frequency']/1e6:.2f}MHz "
+                    f"sr={self._last_params['sample_rate']/1e6:.2f}MSPS "
+                    f"lna={self._last_params['lna_gain']}dB vga={self._last_params['vga_gain']}dB"
+                )
+            except (RuntimeError, OSError) as e:
+                self.get_logger().error(f"Reconfiguration failed: {e}. Scheduling reconnect.")
+                self._hackrf = None
                 self.is_hackrf_streaming = False
-                self.get_logger().info("Stopped RX stream to apply new settings.")
-
-            # --- CORRECTED LINES: Use direct attribute assignment ---
-            self.hackrf.center_freq = int(center_freq)
-            self.hackrf.sample_rate = int(sample_rate)
-            self.hackrf.lna_gain = lna_gain
-            self.hackrf.vga_gain = vga_gain
-            self.hackrf.amplifier_on = amp_enabled
-
-            self.get_logger().info(f"HackRF Configured: Freq={center_freq/1e6:.2f}MHz, "
-                                   f"SR={sample_rate/1e6:.2f}MSPS, LNA={lna_gain}dB, "
-                                   f"VGA={vga_gain}dB, Amp={'ON' if amp_enabled else 'OFF'}")
-
-            # Restart streaming after applying new settings
-            self.hackrf.start_rx(self._rx_callback)
-            self.is_hackrf_streaming = True
-            self.get_logger().info("Restarted RX stream with new settings.")
-
-        except Exception as e:
-            self.get_logger().error(f"Error configuring HackRF or unexpected error: {e}")
-            # ... (rest of the exception handling) ...
+                if self._reconnect_timer:
+                    self._reconnect_timer.cancel()  # cancel any pending timer before creating a new one
+                self._reconnect_timer = self.create_timer(
+                    self._reconnect_delay, self._reconnect_callback
+                )
+                self._reconnect_delay = min(self._reconnect_delay * 2, _MAX_RECONNECT_DELAY)
 
     def _rx_callback(self, data: bytes) -> bool:
         """Bare enqueue — no numpy, no processing. Per D-05 / RX-07."""
@@ -229,26 +249,31 @@ class HackRFPuiblisherNode(Node):
         msg.data = interleaved.tolist()
         self.publisher_.publish(msg)
 
-    def destroy_node(self):
-        """
-        Cleans up HackRF resources when the node is destroyed.
-        Ensures the HackRF stream is stopped and the device is closed.
-        """
-        self.get_logger().info("Shutting down HackRF Publisher Node...")
-        if self.hackrf:
-            if self.is_hackrf_streaming:
+    def destroy_node(self) -> None:
+        """Stop streaming, close device, cancel timers. (RX-06)"""
+        self.get_logger().info("HackRFNode shutting down...")
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+            self._reconnect_timer = None
+        if self._hackrf:
+            with self._device_lock:
+                if self.is_hackrf_streaming:
+                    self._stop_event.set()
+                    try:
+                        self._hackrf.stop_rx()
+                        self.is_hackrf_streaming = False
+                        self.get_logger().info("HackRF RX stream stopped.")
+                    except (RuntimeError, OSError) as e:
+                        self.get_logger().error(f"stop_rx failed during shutdown: {e}")
+                    finally:
+                        self._stop_event.clear()
                 try:
-                    self.hackrf.stop_rx()
-                    self.get_logger().info("HackRF RX stream stopped.")
-                except Exception as e:
-                    self.get_logger().error(f"Error stopping HackRF RX stream: {e}")
-            try:
-                self.hackrf.close()
-                self.get_logger().info("HackRF device closed.")
-            except Exception as e:
-                self.get_logger().error(f"Error closing HackRF device: {e}")
+                    self._hackrf.close()
+                    self.get_logger().info("HackRF device closed.")
+                except (RuntimeError, OSError) as e:
+                    self.get_logger().error(f"close() failed during shutdown: {e}")
         super().destroy_node()
-        self.get_logger().info("HackRF Publisher Node destroyed.")
+        self.get_logger().info("HackRFNode destroyed.")
 
 
 def main(args=None):
