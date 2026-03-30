@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hackrf_driver"
+version = "0.1.0"
+description = "Redis-native HackRF driver (pyhackrf2 + pymayhem + redis), no rclpy"
+requires-python = ">=3.10"
+dependencies = [
+    "pymayhem",
+    "redis>=7.4.0",
+    "hiredis>=3.3.1",
+    "PyYAML>=5.4",
+    "numpy",
+]
+
+[project.optional-dependencies]
+hardware = ["pyhackrf2"]
+test = ["pytest"]
+
+[project.scripts]
+hackrf-driver = "hackrf_driver.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/example/hackrf_ros"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hackrf_driver*"]
