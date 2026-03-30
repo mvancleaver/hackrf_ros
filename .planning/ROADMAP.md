@@ -133,7 +133,11 @@ Plans:
   2. A command that fails dispatch (e.g., bad frequency, missing auth) appears in `hackrf:cmd:dlq` with its error context and timestamp, and the DLQ does not grow beyond 500 entries
   3. If the HackRF produces no IQ data for 10 seconds (simulated by blocking the USB path), the watchdog triggers reconnection and IQ flow resumes — all without deadlocking `_device_lock`
   4. `/hackrf/metrics` ROS2 topic publishes the same data as `hackrf:metrics` hash — a ROS2 subscriber can observe driver health without a Redis client
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Watchdog thread, metrics accumulator, dead-letter queue in hackrf_driver (REL-01, OBS-01, OBS-02)
+- [ ] 07-02-PLAN.md — BridgeNode /hackrf/metrics ROS2 topic (OBS-03)
 
 ### Phase 8: Signal Capabilities
 **Goal**: The driver can record IQ to standards-compliant SigMF files, publish real-time power spectra to Redis and ROS2, and execute programmable frequency hopping sequences
@@ -161,5 +165,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. TX Authorization | 2/2 | Complete | 2026-03-30 |
 | 5. PyMayhem Refactor | 5/5 | Complete | 2026-03-30 |
 | 6. Foundation Hardening | 2/4 | In Progress|  |
-| 7. Observability & Reliability | 0/TBD | Not started | - |
+| 7. Observability & Reliability | 0/2 | Not started | - |
 | 8. Signal Capabilities | 0/TBD | Not started | - |
