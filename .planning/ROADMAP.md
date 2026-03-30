@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 1: RX Pipeline Correctness** - Fix thread-safety bugs and add error recovery to the existing IQ pipeline
 - [ ] **Phase 2: Mayhem Serial Interface** - Build serial control for Mayhem firmware and resolve the mode-conflict question
 - [x] **Phase 3: Redis Bridge** - Stream IQ data and device state to Redis; accept control commands via Redis (completed 2026-03-30)
-- [ ] **Phase 4: TX Authorization** - Add safe, authorized transmission with frequency allowlist and hardware guardrails
+- [x] **Phase 4: TX Authorization** - Add safe, authorized transmission with frequency allowlist and hardware guardrails (completed 2026-03-30)
 
 ## Phase Details
 
@@ -79,7 +79,7 @@ Plans:
 
 Plans:
 - [x] 04-01-PLAN.md — TXController class: frequency allowlist, antenna confirmation, Lua GETDEL auth token (TX-02, TX-03, TX-04, TX-05)
-- [ ] 04-02-PLAN.md — Wire TXController into HackRFNode and RedisBridge command handlers; TX shutdown (TX-01, TX-06, TX-07)
+- [x] 04-02-PLAN.md — Wire TXController into HackRFNode and RedisBridge command handlers; TX shutdown (TX-01, TX-06, TX-07)
 
 ## Progress
 
@@ -91,4 +91,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. RX Pipeline Correctness | 0/3 | In progress | - |
 | 2. Mayhem Serial Interface | 0/3 | Not started | - |
 | 3. Redis Bridge | 2/2 | Complete   | 2026-03-30 |
-| 4. TX Authorization | 1/2 | In Progress|  |
+| 4. TX Authorization | 2/2 | Complete   | 2026-03-30 |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 04-01-PLAN.md (TXController guard logic)
-last_updated: "2026-03-30T06:39:39.516Z"
+status: verifying
+stopped_at: "Completed 04-02-PLAN.md (TX integration) — checkpoint:human-verify pending"
+last_updated: "2026-03-30T06:44:49.321Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
   percent: 0
 ---
 
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-03-29)
 
 Phase: 04 (tx-authorization) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-03-30
 
 Progress: [░░░░░░░░░░] 0%
@@ -61,6 +61,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-redis-bridge P01 | 3min | 2 tasks | 4 files |
 | Phase 03-redis-bridge P02 | 8min | 2 tasks | 3 files |
 | Phase 04-tx-authorization P01 | 3min | 2 tasks | 2 files |
+| Phase 04-tx-authorization P02 | 8min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,7 @@ Recent decisions affecting current work:
 - [Phase 03-redis-bridge]: hasattr guard on _redis_bridge calls in _on_parameter_event and _handle_appstart for graceful degradation (D-02)
 - [Phase 03-redis-bridge]: _start_time recorded once in __init__ for stable uptime_s in _build_state_dict
 - [Phase 04-tx-authorization]: ALWAYS_BLOCKED_BANDS checked unconditionally — EPIRB/ADS-B cannot be bypassed; guard order: antenna->hard-block->freq-filter->auth token; Lua GETDEL fallback for Redis 6.0.16; _tx_lock is Lock (not RLock); txvga_gain default=0
+- [Phase 04-tx-authorization]: TXController wired into HackRFNode after RedisBridge.open(); TX stop first in destroy_node (TX-06); _handle_start_tx as module-level function to access Redis IQ key
 
 ### Pending Todos
 
@@ -95,6 +97,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T06:39:39.513Z
-Stopped at: Completed 04-01-PLAN.md (TXController guard logic)
+Last session: 2026-03-30T06:44:49.318Z
+Stopped at: Completed 04-02-PLAN.md (TX integration) — checkpoint:human-verify pending
 Resume file: None
