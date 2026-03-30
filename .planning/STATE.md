@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-30T08:39:17.720Z"
+status: executing
+stopped_at: Completed 05-pymayhem-refactor 05-01-PLAN.md
+last_updated: "2026-03-30T09:12:53.958Z"
 last_activity: 2026-03-30
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 15
+  completed_plans: 11
   percent: 0
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-29)
 
 **Core value:** Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX operations gated behind explicit authorization.
-**Current focus:** Phase 04 — tx-authorization
+**Current focus:** Phase 05 — pymayhem-refactor
 
 ## Current Position
 
-Phase: 04
-Plan: Not started
-Status: Phase complete — ready for verification
+Phase: 05 (pymayhem-refactor) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
 Last activity: 2026-03-30
 
 Progress: [░░░░░░░░░░] 0%
@@ -63,6 +63,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-tx-authorization P01 | 3min | 2 tasks | 2 files |
 | Phase 04-tx-authorization P02 | 8min | 2 tasks | 3 files |
 | Phase 04-tx-authorization P02 | 10min | 3 tasks | 2 files |
+| Phase 05-pymayhem-refactor P01 | 6min | 2 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,8 @@ Recent decisions affecting current work:
 - [Phase 04-tx-authorization]: _handle_start_tx as module-level function to access Redis IQ key via node._redis_bridge._redis
 - [Phase 04-tx-authorization]: TXHardBlockedError not caught in _handle_start_tx — propagates to generic error handler at error level (EPIRB/ADS-B blocks are unconditional law violations, not warnings)
 - [Phase 04-tx-authorization]: _last_tx_freq attribute added to TXController.start_tx() for state dict tracking without changing guard logic
+- [Phase 05-pymayhem-refactor]: pymayhem uses stdlib logging.getLogger('pymayhem.serial') instead of injected logger; domain objects receive _send_command callable at construction via callable injection pattern (D-04)
+- [Phase 05-pymayhem-refactor]: setup.cfg added alongside pyproject.toml for legacy editable install compatibility with system pip 22.0.2; UnsafeMayhemClient methods return raw list[str] for dangerous commands (caller controls error handling)
 
 ### Pending Todos
 
@@ -101,6 +104,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T08:39:17.716Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-pymayhem-refactor/05-CONTEXT.md
+Last session: 2026-03-30T09:12:53.954Z
+Stopped at: Completed 05-pymayhem-refactor 05-01-PLAN.md
+Resume file: None
