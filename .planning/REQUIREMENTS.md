@@ -63,14 +63,14 @@ Requirements for v2.0: Hardening, Observability & Signal Capabilities.
 - [x] **ERR-01**: pymayhem raises typed exceptions (MayhemError hierarchy) instead of returning bool on command failures
 - [x] **ERR-02**: hackrf_driver raises typed exceptions (HackRFError hierarchy) for config, device, and TX errors
 - [x] **ERR-03**: All public pymayhem methods validate input parameters and raise ValueError on out-of-range values
-- [ ] **ERR-04**: All hackrf_driver config changes validate against PARAM_RANGES before touching hardware
-- [ ] **ERR-05**: Exception dispatch boundary in redis_bridge catches pymayhem/hackrf exceptions and maps to structured Redis error state
+- [x] **ERR-04**: All hackrf_driver config changes validate against PARAM_RANGES before touching hardware
+- [x] **ERR-05**: Exception dispatch boundary in redis_bridge catches pymayhem/hackrf exceptions and maps to structured Redis error state
 
 ### Reliability
 
 - [ ] **REL-01**: Device health watchdog detects USB stall (no RX data for 10s) and triggers automatic reconnect without deadlocking _device_lock
 - [x] **REL-02**: BridgeNode survives Redis restart — exponential backoff retry loop with automatic resubscribe to Pub/Sub channels
-- [ ] **REL-03**: Every IQ XADD entry includes a monotonic sequence number; consumers can detect dropped buffers
+- [x] **REL-03**: Every IQ XADD entry includes a monotonic sequence number; consumers can detect dropped buffers
 
 ### Observability
 
@@ -80,9 +80,9 @@ Requirements for v2.0: Hardening, Observability & Signal Capabilities.
 
 ### TX Safety
 
-- [ ] **TXS-01**: validate_tx() checks all four TX guards (antenna, hard-block, freq filter, auth existence) without consuming the auth token
+- [x] **TXS-01**: validate_tx() checks all four TX guards (antenna, hard-block, freq filter, auth existence) without consuming the auth token
 - [x] **TXS-02**: BridgeNode exposes /hackrf/confirm_antenna ROS2 service that sets the Redis antenna confirmation key
-- [ ] **TXS-03**: TXController periodically re-reads antenna confirmation key (not just at init)
+- [x] **TXS-03**: TXController periodically re-reads antenna confirmation key (not just at init)
 
 ### IQ Recording
 
@@ -185,13 +185,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ERR-01 | Phase 6 | Complete |
 | ERR-02 | Phase 6 | Complete |
 | ERR-03 | Phase 6 | Complete |
-| ERR-04 | Phase 6 | Pending |
-| ERR-05 | Phase 6 | Pending |
+| ERR-04 | Phase 6 | Complete |
+| ERR-05 | Phase 6 | Complete |
 | REL-02 | Phase 6 | Complete |
-| REL-03 | Phase 6 | Pending |
-| TXS-01 | Phase 6 | Pending |
+| REL-03 | Phase 6 | Complete |
+| TXS-01 | Phase 6 | Complete |
 | TXS-02 | Phase 6 | Complete |
-| TXS-03 | Phase 6 | Pending |
+| TXS-03 | Phase 6 | Complete |
 | LEG-01 | Phase 6 | Complete |
 | REL-01 | Phase 7 | Pending |
 | OBS-01 | Phase 7 | Pending |
@@ -212,10 +212,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 - v1 requirements: 32 total (all complete)
-- v2 requirements: 27 total (pending)
-- Mapped to phases: 32 (v1 complete), 27 (v2 pending — Phases 6, 7, 8)
+- v2 requirements: 27 total (11 complete, 16 pending)
+- Mapped to phases: 32 (v1 complete), 27 (v2 — Phase 6 complete, Phases 7-8 pending)
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-29*
-*Last updated: 2026-03-30 — v2.0 roadmap created*
+*Last updated: 2026-03-30 — Phase 6 complete*
