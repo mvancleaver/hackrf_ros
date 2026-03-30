@@ -113,10 +113,11 @@ class TestHackRFDriverUpdateParam(unittest.TestCase):
     """Test _update_param validates ranges and updates _last_params."""
 
     def test_update_param_rejects_out_of_range(self):
-        """_update_param rejects center_frequency outside PARAM_RANGES (1e6, 6e9)."""
+        """_update_param raises HackRFConfigError for center_frequency outside PARAM_RANGES (1e6, 6e9)."""
+        from hackrf_driver.exceptions import HackRFConfigError
         driver = _make_driver()
-        # Frequency below range
-        driver._update_param('center_frequency', 0.0)
+        with self.assertRaises(HackRFConfigError):
+            driver._update_param('center_frequency', 0.0)
         self.assertAlmostEqual(driver._last_params['center_frequency'], 433_920_000.0)  # unchanged
 
     def test_update_param_accepts_valid(self):
