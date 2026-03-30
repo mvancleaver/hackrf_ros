@@ -49,7 +49,7 @@ Plans:
 Plans:
 - [x] 02-01-PLAN.md — Create hackrf_ros_interfaces CMake package with AppStart.srv and SetFreq.srv (MAY-03, MAY-04)
 - [x] 02-02-PLAN.md — Implement MayhemSerial helper class with serial lifecycle, command methods, and unit tests (MAY-01, MAY-02, MAY-03, MAY-04, MAY-05)
-- [ ] 02-03-PLAN.md — Wire MayhemSerial into HackRFNode: services, status topic, mode coexistence check (MAY-01, MAY-03, MAY-04, MAY-05, MAY-06)
+- [x] 02-03-PLAN.md — Wire MayhemSerial into HackRFNode: services, status topic, mode coexistence check (MAY-01, MAY-03, MAY-04, MAY-05, MAY-06)
 
 ### Phase 3: Redis Bridge
 **Goal**: IQ samples and device state are published to Redis continuously, and external callers can reconfigure the device via Redis commands
