@@ -23,7 +23,7 @@ class IQPlotterNode(Node):
         # --- Subscriber Setup ---
         self.subscription = self.create_subscription(
             Float32MultiArray,
-            '/hackrf_iq_data',
+            '/hackrf/iq',
             self.iq_data_callback,
             10 # QoS history depth
         )
