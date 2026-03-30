@@ -142,6 +142,8 @@ class TXController:
         self._last_tx_freq: int = 0  # last transmitted frequency (for state dict)
         # TX cannot re-enter itself — use Lock not RLock
         self._tx_lock = threading.Lock()
+        self._antenna_reread_interval = 30.0  # seconds
+        self._antenna_reread_timer: threading.Timer | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -172,6 +174,36 @@ class TXController:
                 'TX will be blocked until antenna is confirmed. '
                 f'Set Redis key {self.ANTENNA_KEY!r} to "1" to confirm.'
             )
+        self._schedule_antenna_reread()
+
+    def _schedule_antenna_reread(self) -> None:
+        """Schedule next periodic antenna confirmation re-read."""
+        if self._skip_antenna_check:
+            return  # no need to re-read if antenna check is bypassed
+        self._antenna_reread_timer = threading.Timer(
+            self._antenna_reread_interval, self._reread_antenna
+        )
+        self._antenna_reread_timer.daemon = True
+        self._antenna_reread_timer.start()
+
+    def _reread_antenna(self) -> None:
+        """Periodic re-read of antenna confirmation key from Redis."""
+        try:
+            val = self._redis.get(self.ANTENNA_KEY)
+            confirmed = (val == b'1')
+            if confirmed and not self._antenna_confirmed:
+                self._logger.info(
+                    'TXController: antenna confirmation received (periodic re-read).'
+                )
+            elif not confirmed and self._antenna_confirmed:
+                self._logger.warning(
+                    'TXController: antenna confirmation revoked (periodic re-read).'
+                )
+            self._antenna_confirmed = confirmed
+        except Exception as e:
+            self._logger.warning(f'TXController: antenna re-read failed: {e}')
+        # Reschedule regardless of success/failure
+        self._schedule_antenna_reread()
 
     def stop(self) -> None:
         """Alias for stop_tx(). Called from shutdown — safe to call any time."""
@@ -320,6 +352,9 @@ class TXController:
         Safe to call at any time — no-op when not transmitting.
         Called from shutdown; must not raise.
         """
+        if self._antenna_reread_timer is not None:
+            self._antenna_reread_timer.cancel()
+            self._antenna_reread_timer = None
         with self._tx_lock:
             if not self._is_transmitting:
                 return
