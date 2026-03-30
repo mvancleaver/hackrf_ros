@@ -182,13 +182,40 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REF-05 | Phase 5 | Complete |
 | REF-06 | Phase 5 | Complete |
 | REF-07 | Phase 5 | Complete |
+| ERR-01 | Phase 6 | Pending |
+| ERR-02 | Phase 6 | Pending |
+| ERR-03 | Phase 6 | Pending |
+| ERR-04 | Phase 6 | Pending |
+| ERR-05 | Phase 6 | Pending |
+| REL-02 | Phase 6 | Pending |
+| REL-03 | Phase 6 | Pending |
+| TXS-01 | Phase 6 | Pending |
+| TXS-02 | Phase 6 | Pending |
+| TXS-03 | Phase 6 | Pending |
+| LEG-01 | Phase 6 | Pending |
+| REL-01 | Phase 7 | Pending |
+| OBS-01 | Phase 7 | Pending |
+| OBS-02 | Phase 7 | Pending |
+| OBS-03 | Phase 7 | Pending |
+| REC-01 | Phase 8 | Pending |
+| REC-02 | Phase 8 | Pending |
+| REC-03 | Phase 8 | Pending |
+| REC-04 | Phase 8 | Pending |
+| FFT-01 | Phase 8 | Pending |
+| FFT-02 | Phase 8 | Pending |
+| FFT-03 | Phase 8 | Pending |
+| FFT-04 | Phase 8 | Pending |
+| HOP-01 | Phase 8 | Pending |
+| HOP-02 | Phase 8 | Pending |
+| HOP-03 | Phase 8 | Pending |
+| HOP-04 | Phase 8 | Pending |
 
 **Coverage:**
 - v1 requirements: 32 total (all complete)
-- v2 requirements: 24 total (pending)
-- Mapped to phases: 32 (v1), 0 (v2 — awaiting roadmap)
-- Unmapped: 24 ⚠️
+- v2 requirements: 27 total (pending)
+- Mapped to phases: 32 (v1 complete), 27 (v2 pending — Phases 6, 7, 8)
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-29*
-*Last updated: 2026-03-30 after v2.0 milestone definition*
+*Last updated: 2026-03-30 — v2.0 roadmap created*

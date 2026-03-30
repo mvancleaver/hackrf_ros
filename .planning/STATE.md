@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Hardening, Observability & Signal Capabilities
-status: defining_requirements
-stopped_at: Milestone v2.0 started — defining requirements
-last_updated: "2026-03-30T17:00:00.000Z"
+status: roadmap_ready
+stopped_at: Roadmap created — ready to plan Phase 6
+last_updated: "2026-03-30T17:30:00.000Z"
 last_activity: 2026-03-30
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,17 +18,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-29)
+See: .planning/PROJECT.md (updated 2026-03-30)
 
 **Core value:** Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX operations gated behind explicit authorization.
-**Current focus:** Milestone v2.0 — Defining requirements
+**Current focus:** Milestone v2.0 — Phase 6: Foundation Hardening (not started)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 6 — Foundation Hardening
 Plan: —
-Status: Defining requirements
-Last activity: 2026-03-30 — Milestone v2.0 started
+Status: Roadmap created, ready for planning
+Last activity: 2026-03-30 — v2.0 roadmap created (Phases 6-8, 27 requirements)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -107,15 +107,17 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- Phase 6 plan: Exception dispatch boundary (ERR-05) must catch pymayhem/hackrf exceptions at _dispatch_command boundary — never propagate raw exceptions through the dispatch table (research Pitfall 1)
+- Phase 7 plan: Watchdog correction queue design — name the thread that drains the correction queue and specify how it avoids re-entry with _configure_device() (research flag from SUMMARY.md)
+- Phase 8 plan: SigMF gap entry calculation — when a sequence gap is detected, the exact formula (chunk_count * chunk_size) for sample_start must be specified before IQRecorder is implemented
 
 ### Blockers/Concerns
 
-- **Phase 2 (serial):** Concurrent pyhackrf2 + Mayhem serial access is undocumented — empirical test required at phase start. If they cannot coexist, a mode-switch state machine is needed (~1 extra plan of complexity).
-- **Phase 4 (TX):** pyhackrf2 start_tx() API has thin documentation. Half-duplex RX/TX switching timing needs empirical validation before writing TXController.
+- **Phase 7 (watchdog):** Lock acquisition order between _device_lock, _tx_lock, and watchdog correction queue must be explicitly designed. Deadlock risk is fully traced in research SUMMARY.md — phase plan must resolve before implementation.
+- **Phase 8 (spectrum):** OPENBLAS_NUM_THREADS=1 mitigation for Jetson ARM64 is not tested against actual throughput numbers. Phase plan should include a performance benchmark gate.
 
 ## Session Continuity
 
-Last session: 2026-03-30T16:05:35.990Z
-Stopped at: Completed 05-pymayhem-refactor 05-05-PLAN.md
+Last session: 2026-03-30T17:30:00.000Z
+Stopped at: v2.0 roadmap created — Phases 6, 7, 8 defined
 Resume file: None
