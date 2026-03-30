@@ -24,6 +24,7 @@ import threading
 import time
 
 from hackrf_driver.config import PARAM_RANGES, _MIN_RECONNECT_DELAY, _MAX_RECONNECT_DELAY
+from hackrf_driver.exceptions import HackRFConfigError
 from hackrf_driver.redis_bridge import RedisBridge
 from hackrf_driver.tx_controller import TXController
 
@@ -102,12 +103,16 @@ class HackRFDriver:
             )
             self._mayhem = None
 
+        # Epoch timestamp for IQ sequence numbers (REL-03)
+        self._driver_epoch: int = int(time.time())
+
         # --- RedisBridge ---
         self._redis_bridge = RedisBridge(
             self._redis_queue,
             self,
             self._logger,
             maxlen=config.get('redis_stream_maxlen', 10000),
+            driver_epoch=self._driver_epoch,
         )
         if not self._redis_bridge.open():
             self._logger.warning(
@@ -351,11 +356,9 @@ class HackRFDriver:
         if name in PARAM_RANGES:
             lo, hi = PARAM_RANGES[name]
             if not (lo <= value <= hi):
-                self._logger.warning(
-                    f"Parameter '{name}' value {value} rejected: "
-                    f'outside hardware range [{lo}, {hi}]'
+                raise HackRFConfigError(
+                    f"Parameter '{name}' value {value} out of range [{lo}, {hi}]"
                 )
-                return
         self._logger.info(f"Parameter '{name}' set to: {value}")
         if name in self._last_params:
             self._last_params[name] = value

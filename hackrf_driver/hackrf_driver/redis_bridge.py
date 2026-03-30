@@ -14,12 +14,14 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 
 import numpy as np
 import redis
 
+from hackrf_driver.exceptions import HackRFError, TXBlockedError, TXFreqBlockedError, TXNotAuthorizedError  # noqa: F401
 from hackrf_driver.tx_controller import TXController
-from hackrf_driver.exceptions import TXBlockedError, TXFreqBlockedError, TXNotAuthorizedError  # noqa: F401
+from pymayhem.exceptions import MayhemError
 
 
 def _handle_start_tx(driver, cmd):
@@ -94,7 +96,7 @@ class RedisBridge:
     NOTIFY_KEY = 'hackrf:iq:notify'   # D-14: Pub/Sub notification channel
 
     def __init__(self, iq_queue: queue.Queue, node, logger,
-                 maxlen: int = 10000) -> None:
+                 maxlen: int = 10000, driver_epoch: int = None) -> None:
         """Initialise RedisBridge.
 
         Args:
@@ -103,11 +105,15 @@ class RedisBridge:
             logger: Object with .info(), .warning(), .error() methods
                     (compatible with rclpy.Logger or logging.Logger).
             maxlen: Redis Stream MAXLEN for approximate trimming (D-04).
+            driver_epoch: Unix timestamp epoch for IQ sequence numbers (REL-03).
+                          Defaults to current time if not provided.
         """
         self._iq_queue = iq_queue
         self._node = node
         self._logger = logger
         self._maxlen = maxlen
+        self._driver_epoch = driver_epoch if driver_epoch is not None else int(time.time())
+        self._seq_counter = 0
 
         self._redis: redis.Redis | None = None
         self._stop_event = threading.Event()
@@ -233,9 +239,11 @@ class RedisBridge:
             float32_arr = np.empty(n_pairs * 2, dtype=np.float32)
             float32_arr[0::2] = iq[:, 0].astype(np.float32) / 128.0  # I channel
             float32_arr[1::2] = iq[:, 1].astype(np.float32) / 128.0  # Q channel
+            seq = f'{self._driver_epoch}:{self._seq_counter}'.encode()
+            self._seq_counter += 1
             entry_id = self._redis.xadd(
                 self.STREAM_KEY,
-                {b'data': float32_arr.tobytes()},
+                {b'data': float32_arr.tobytes(), b'seq': seq},
                 maxlen=self._maxlen,
                 approximate=True,
             )
@@ -291,7 +299,36 @@ class RedisBridge:
             return
         try:
             handler(self._node, cmd)
+        except (MayhemError, HackRFError) as e:
+            self._logger.warning(
+                f'RedisBridge: command {action!r} typed error: {e}'
+            )
+            self._publish_command_error(action, type(e).__name__, str(e))
         except Exception as e:
             self._logger.error(
-                f'RedisBridge: command {action!r} failed: {e}'
+                f'RedisBridge: command {action!r} unexpected error: {e}'
             )
+            self._publish_command_error(action, 'UnexpectedError', str(e))
+
+    def _publish_command_error(self, action: str, error_type: str, message: str) -> None:
+        """Write structured error to hackrf:cmd:last_error hash.
+
+        No-op if Redis is not connected. Never raises — error publishing must
+        not interfere with the bridge loop.
+
+        Args:
+            action: The command action that failed.
+            error_type: Exception class name.
+            message: Exception message string.
+        """
+        if self._redis is None:
+            return
+        try:
+            self._redis.hset('hackrf:cmd:last_error', mapping={
+                'action': action,
+                'error_type': error_type,
+                'message': message,
+                'timestamp': str(time.time()),
+            })
+        except redis.exceptions.RedisError:
+            pass  # error publishing must never raise

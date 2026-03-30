@@ -126,10 +126,12 @@ class TestHackRFDriverUpdateParam(unittest.TestCase):
         self.assertAlmostEqual(driver._last_params['center_frequency'], 915_000_000.0)
 
     def test_update_param_rejects_lna_out_of_range(self):
-        """_update_param rejects lna_gain > 40."""
+        """_update_param raises HackRFConfigError for lna_gain > 40."""
+        from hackrf_driver.exceptions import HackRFConfigError
         driver = _make_driver()
         original = driver._last_params['lna_gain']
-        driver._update_param('lna_gain', 999)
+        with self.assertRaises(HackRFConfigError):
+            driver._update_param('lna_gain', 999)
         self.assertEqual(driver._last_params['lna_gain'], original)
 
     def test_update_param_accepts_valid_vga(self):
