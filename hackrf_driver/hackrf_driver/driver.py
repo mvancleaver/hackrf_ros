@@ -73,6 +73,9 @@ class HackRFDriver:
         # Main loop gate (D-12)
         self._stop_event = threading.Event()
 
+        # Separate signal for stopping RX USB transfers (C-2 fix: decoupled from _stop_event)
+        self._rx_stop_signal = threading.Event()
+
         # Device access serialisation
         self._device_lock = threading.RLock()
 
@@ -234,15 +237,14 @@ class HackRFDriver:
         if self._hackrf is not None:
             with self._device_lock:
                 if self.is_hackrf_streaming:
-                    self._stop_event.set()
+                    self._rx_stop_signal.set()
                     try:
                         self._hackrf.stop_rx()
                         self.is_hackrf_streaming = False
                         self._logger.info('HackRF RX stream stopped.')
                     except (RuntimeError, OSError) as e:
                         self._logger.error(f'stop_rx failed during shutdown: {e}')
-                    finally:
-                        self._stop_event.clear()
+                    # No need to clear _rx_stop_signal — we're shutting down
                 try:
                     self._hackrf.close()
                     self._logger.info('HackRF device closed.')
@@ -322,7 +324,7 @@ class HackRFDriver:
             return
         with self._device_lock:
             if self.is_hackrf_streaming:
-                self._stop_event.set()
+                self._rx_stop_signal.set()
                 try:
                     self._hackrf.stop_rx()
                     self.is_hackrf_streaming = False
@@ -330,7 +332,7 @@ class HackRFDriver:
                 except (RuntimeError, OSError) as e:
                     self._logger.warning(f'stop_rx error (non-fatal): {e}')
                 finally:
-                    self._stop_event.clear()
+                    self._rx_stop_signal.clear()
                 time.sleep(0.1)  # firmware settling (libhackrf issue #916)
             try:
                 self._apply_last_params()
@@ -404,7 +406,7 @@ class HackRFDriver:
                     q.put_nowait(chunk)
                 except queue.Full:
                     pass
-        return self._stop_event.is_set()
+        return self._rx_stop_signal.is_set()
 
     def _iq_publish_loop(self) -> None:
         """Daemon thread: drain _ros_queue and check watchdog correction queue."""
@@ -475,28 +477,30 @@ class HackRFDriver:
 
     def _start_rx_if_stopped(self) -> None:
         """Start RX streaming if not already running."""
-        if not self.is_hackrf_streaming and self._hackrf:
-            with self._device_lock:
-                try:
-                    self._hackrf.start_rx(self._rx_callback)
-                    self.is_hackrf_streaming = True
-                    self._logger.info('RX started via Redis command.')
-                except Exception as e:
-                    self._logger.error(f'_start_rx_if_stopped failed: {e}')
+        with self._device_lock:
+            if self.is_hackrf_streaming or not self._hackrf:
+                return
+            try:
+                self._hackrf.start_rx(self._rx_callback)
+                self.is_hackrf_streaming = True
+                self._logger.info('RX started via Redis command.')
+            except Exception as e:
+                self._logger.error(f'_start_rx_if_stopped failed: {e}')
 
     def _stop_rx_if_running(self) -> None:
         """Stop RX streaming if currently running."""
-        if self.is_hackrf_streaming and self._hackrf:
-            with self._device_lock:
-                self._stop_event.set()
-                try:
-                    self._hackrf.stop_rx()
-                    self.is_hackrf_streaming = False
-                    self._logger.info('RX stopped via Redis command.')
-                except Exception as e:
-                    self._logger.error(f'_stop_rx_if_running failed: {e}')
-                finally:
-                    self._stop_event.clear()
+        with self._device_lock:
+            if not (self.is_hackrf_streaming and self._hackrf):
+                return
+            self._rx_stop_signal.set()
+            try:
+                self._hackrf.stop_rx()
+                self.is_hackrf_streaming = False
+                self._logger.info('RX stopped via Redis command.')
+            except Exception as e:
+                self._logger.error(f'_stop_rx_if_running failed: {e}')
+            finally:
+                self._rx_stop_signal.clear()
 
     # ------------------------------------------------------------------
     # Parameter setters (same method names as HackRFNode for RedisBridge dispatch)
@@ -546,7 +550,7 @@ class HackRFDriver:
             'serial_connected': (
                 self._mayhem is not None and
                 getattr(self._mayhem, '_serial', None) is not None and
-                getattr(self._mayhem._serial, '_is_open', False)
+                not getattr(self._mayhem._serial, 'needs_reconnect', True)
             ),
             'is_transmitting':  (
                 hasattr(self, '_tx_controller') and self._tx_controller._is_transmitting

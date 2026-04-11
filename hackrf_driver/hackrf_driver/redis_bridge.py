@@ -47,6 +47,13 @@ def _handle_stop_tx(driver, cmd):
     driver._tx_controller.stop_tx()
 
 
+def _require_mayhem(driver):
+    """Return driver._mayhem or raise HackRFError if Mayhem serial is unavailable."""
+    if driver._mayhem is None:
+        raise HackRFError('Mayhem serial not available — pymayhem not installed or serial not connected')
+    return driver._mayhem
+
+
 # Module-level command handler dispatch table (D-06)
 # driver exposes same method names as HackRFNode did — interface is identical
 _COMMAND_HANDLERS = {
@@ -55,8 +62,8 @@ _COMMAND_HANDLERS = {
     'set_lna_gain':    lambda driver, p: driver._set_lna_gain(p['lna_gain']),
     'set_vga_gain':    lambda driver, p: driver._set_vga_gain(p['vga_gain']),
     'set_amp_enabled': lambda driver, p: driver._set_amp_enabled(p['enabled']),
-    'appstart':        lambda driver, p: driver._mayhem.appstart(p['app_name']),
-    'serial_setfreq':  lambda driver, p: driver._mayhem.setfreq(int(p['freq_hz'])),
+    'appstart':        lambda driver, p: _require_mayhem(driver).system.appstart(p['app_name']),
+    'serial_setfreq':  lambda driver, p: _require_mayhem(driver).radio.setfreq(int(p['freq_hz'])),
     'start_rx':        lambda driver, p: driver._start_rx_if_stopped(),
     'stop_rx':         lambda driver, p: driver._stop_rx_if_running(),
     'start_tx':        _handle_start_tx,

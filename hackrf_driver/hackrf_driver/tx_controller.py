@@ -22,6 +22,7 @@ from typing import Any, Callable
 import redis
 
 from hackrf_driver.exceptions import (  # noqa: F401
+    HackRFError,
     TXBlockedError,
     TXFreqBlockedError,
     TXHardBlockedError,
@@ -271,6 +272,12 @@ class TXController:
 
             with self._device_lock:
                 hackrf = self._hackrf_getter()
+                if hackrf is None:
+                    self._start_rx_fn()  # resume RX since we stopped it
+                    raise HackRFError(
+                        'TX aborted: HackRF device disconnected. '
+                        'Auth token was consumed — re-issue a new token.'
+                    )
                 hackrf.center_freq = freq_hz
                 hackrf.txvga_gain = txvga_gain
                 hackrf.buffer = bytearray(iq_bytes)
@@ -360,7 +367,8 @@ class TXController:
                 return
             try:
                 hackrf = self._hackrf_getter()
-                hackrf.stop_tx()
+                if hackrf is not None:
+                    hackrf.stop_tx()
             except RuntimeError:
                 pass
             self._is_transmitting = False
