@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 04-advanced-signal-intelligence/04-01-PLAN.md
-last_updated: "2026-04-13T06:26:00.000Z"
+stopped_at: Completed 04-advanced-signal-intelligence/04-02-PLAN.md
+last_updated: "2026-04-13T06:31:00.000Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 15
-  completed_plans: 12
-  percent: 80
+  completed_plans: 13
+  percent: 87
 ---
 
 # Project State
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-04-13)
 ## Current Position
 
 Phase: 4 of 4 in progress (Advanced Signal Intelligence — anomaly, emitter loc, cyclo, multi-radio)
-Status: Phase 4 Plan 1 complete — message schema and multi-radio infrastructure delivered
+Status: Phase 4 Plan 2 complete — AnomalyDetector (ADV-01) embedded in cfar_node.py
 Last activity: 2026-04-13
 
-Progress: [████████░░] 80%
+Progress: [████████░░] 87%
 
 ## Performance Metrics
 
@@ -86,6 +86,9 @@ Recent decisions affecting current work:
 - [04-01]: device_index declared in _declare_parameters() and read in on_configure() before HackRF() call; default 0 for backward compatibility
 - [04-01]: emitter_loc_node and cyclo_node entry points registered in setup.py now to unblock 04-02/04-04 without setup.py changes later
 - [04-01]: multi_radio.launch.py uses OpaqueFunction for dynamic N-node generation at launch time
+- [04-02]: AnomalyDetector lazy-initialized on first PSD frame to avoid n_bins dependency at node init
+- [04-02]: ROS2 stubs in test file allow pytest without rclpy (same pattern as test_rf_map_node.py)
+- [04-02]: Seeding frame returns zeros to avoid transient false alarms at baseline initialization
 
 ### Pending Todos
 
