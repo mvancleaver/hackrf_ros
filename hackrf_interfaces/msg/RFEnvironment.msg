@@ -1,0 +1,6 @@
+std_msgs/Header header
+uint32 emitter_count
+float32 occupancy_pct
+float32 noise_floor_dbm
+float32 peak_power_dbm
+float64 peak_frequency_hz

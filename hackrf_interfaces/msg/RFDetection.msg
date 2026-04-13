@@ -1,0 +1,7 @@
+float64 center_frequency_hz
+float64 bandwidth_hz
+float32 power_dbm
+float32 snr_db
+string classification
+uint32 persistence_frames
+uint32 detection_id
