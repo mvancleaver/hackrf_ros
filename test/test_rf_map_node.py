@@ -186,7 +186,7 @@ class TestEmaAccumulation:
         """First observation on an unobserved cell sets value directly (not EMA from -120)."""
         node = _FakeNode()
         _accumulate_detection(node, row=5, col=5, power_dbm=-80.0)
-        assert node._cell_observed[5, 5] is True
+        assert node._cell_observed[5, 5] == True  # noqa: E712  numpy bool
         assert abs(node._cell_power[5, 5] - (-80.0)) < 1e-4
 
     def test_second_observation_applies_ema(self):
