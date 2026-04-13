@@ -29,6 +29,7 @@ setup(
             'hackrf_node = hackrf_ros.hackrf_lifecycle_node:main',
             'spectrum_node = hackrf_ros.spectrum_node:main',
             'sweep_node = hackrf_ros.sweep_node:main',
+            'sweep_action_node = hackrf_ros.sweep_action_node:main',
             'sweep_display = hackrf_ros.sweep_display:main',
             'cfar_node = hackrf_ros.cfar_node:main',
             'iq_recorder_node = hackrf_ros.iq_recorder_node:main',
