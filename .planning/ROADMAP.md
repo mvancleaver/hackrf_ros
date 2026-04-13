@@ -46,7 +46,12 @@ Plans:
   2. Calling the IQ recording action server produces a valid SigMF file pair (`.sigmf-data` + `.sigmf-meta`) containing robot pose from TF at capture start and all SDR parameters
   3. IQ recording does not drop samples under sustained write load — the bounded write-thread queue absorbs disk stalls without blocking the ROS executor
   4. A nav_msgs/OccupancyGrid topic is published with RF power observations spatially integrated by grid cell, at a configurable resolution and update rate
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [x] 02-01-PLAN.md — Action interfaces (Sweep.action, RecordIQ.action) + sigmf pip dep + nav_msgs apt dep
+- [ ] 02-02-PLAN.md — Sweep action server: per-hop feedback, Tukey-blended stitching, cancel with frequency restore
+- [ ] 02-03-PLAN.md — IQ recorder action server: SigMF ci8 write thread, TF pose, driver fan-out services
+- [ ] 02-04-PLAN.md — RF occupancy grid: EMA power accumulation per cell, nav_msgs/OccupancyGrid publish, autonomy launch
 **UI hint**: no
 
 ### Phase 3: Reliability
@@ -80,6 +85,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Sensor Foundations | 1/4 | In progress | - |
-| 2. Robot Autonomy Integration | 0/? | Not started | - |
+| 2. Robot Autonomy Integration | 1/4 | In Progress|  |
 | 3. Reliability | 0/? | Not started | - |
 | 4. Advanced Signal Intelligence | 0/? | Not started | - |

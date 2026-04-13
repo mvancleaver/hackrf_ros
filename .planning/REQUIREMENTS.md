@@ -25,14 +25,14 @@
 
 ### Sweep & Survey
 
-- [ ] **SWP-01**: Sweep implemented as ROS2 action server with per-hop progress feedback
+- [x] **SWP-01**: Sweep implemented as ROS2 action server with per-hop progress feedback
 - [ ] **SWP-02**: Sweep action supports cancel (abort mid-sweep, restore original frequency)
 - [ ] **SWP-03**: Sweep returns stitched composite PSD with Tukey-blended hop boundaries in linear domain
 
 ### IQ Recording
 
-- [ ] **REC-01**: IQ recording implemented as ROS2 action server with start/stop and progress feedback
-- [ ] **REC-02**: IQ written in SigMF format (ci8 datatype, JSON metadata sidecar)
+- [x] **REC-01**: IQ recording implemented as ROS2 action server with start/stop and progress feedback
+- [x] **REC-02**: IQ written in SigMF format (ci8 datatype, JSON metadata sidecar)
 - [ ] **REC-03**: Recording metadata includes robot pose from TF at capture start, all SDR parameters, trigger reason
 - [ ] **REC-04**: Recorder uses dedicated write thread with bounded queue (no IQ drops from disk stalls)
 
