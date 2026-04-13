@@ -1,0 +1,18 @@
+services:
+  hackrf:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hackrf_ros
+    network_mode: host
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - DISPLAY=:1
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    tty: true
+    command: ros2 launch hackrf_ros hackrf.launch.py

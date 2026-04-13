@@ -1,3 +1,0 @@
-[console_scripts]
-hackrf-driver = hackrf_driver.cli:main
-
