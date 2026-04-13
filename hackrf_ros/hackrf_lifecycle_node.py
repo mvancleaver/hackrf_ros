@@ -49,13 +49,22 @@ PARAM_RANGES = {
     'vga_gain':         (0, 62),
 }
 
-_STREAM_RESTART_PARAMS = frozenset({'center_frequency', 'sample_rate'})
+# HackRF firmware supports hot retuning: center_freq register can be updated
+# while streaming — no stop/start needed. Only sample_rate requires restart
+# (USB bandwidth changes).  Removing center_frequency here prevents SIGSEGV
+# in libhackrf caused by stopping/restarting USB transfers mid-sweep.
+_STREAM_RESTART_PARAMS = frozenset({'sample_rate'})
 
 FFT_SIZE = 4096
 PSD_AVERAGING = 16
 USABLE_BW_FRACTION = 0.8  # 80% — matches MAX2837 analog filter rolloff
 EDGE_TRIM = int(FFT_SIZE * 0.10)  # 10% per side
 ADC_CLIP_THRESHOLD = 0.005  # discard frame if >0.5% samples clipped
+
+AGC_HOLD_FRAMES = 10   # publish cycles before AGC may fire again (hysteresis)
+AGC_CLIP_WINDOW = 5    # clips within this many cycles triggers gain reduction
+AGC_LNA_STEP = 8       # dB — HackRF LNA steps in 8 dB increments
+AGC_VGA_STEP = 4       # dB — reduce VGA by 4 dB (2 dB minimum step x2)
 
 
 class HackRFLifecycleNode(LifecycleNode):
@@ -76,6 +85,12 @@ class HackRFLifecycleNode(LifecycleNode):
         self._last_rx_time: float = 0.0
         self._rx_overflow_count = 0
         self._clip_count = 0
+
+        # AGC state (REL-01)
+        self._agc_hold_counter: int = 0
+        self._agc_clip_snapshot: int = 0   # _clip_count value at last AGC check
+        self._agc_cycle_counter: int = 0   # publish cycles since last AGC fire
+        self._agc_last_action: str = 'none'
 
         # Recorder fan-out queue — None when not recording (per D-09, D-10)
         self._recorder_q: queue.Queue | None = None
@@ -388,6 +403,54 @@ class HackRFLifecycleNode(LifecycleNode):
             except queue.Empty:
                 break
 
+    def _agc_tick(self) -> None:
+        """Check ADC clip rate and reduce gain if needed (REL-01).
+
+        Called once per PSD publish cycle. Uses a clip-count delta over
+        AGC_CLIP_WINDOW cycles. Hysteresis: AGC_HOLD_FRAMES cycles between
+        consecutive reductions.
+        """
+        self._agc_cycle_counter += 1
+
+        if self._agc_hold_counter > 0:
+            self._agc_hold_counter -= 1
+            self._agc_clip_snapshot = self._clip_count  # keep snapshot fresh
+            return
+
+        clips_in_window = self._clip_count - self._agc_clip_snapshot
+        self._agc_clip_snapshot = self._clip_count
+
+        if clips_in_window < AGC_CLIP_WINDOW:
+            return   # clip rate acceptable
+
+        # Reduce LNA first, then VGA
+        lna = int(self.get_parameter('lna_gain').value)
+        vga = int(self.get_parameter('vga_gain').value)
+
+        if lna > 0:
+            new_lna = max(0, lna - AGC_LNA_STEP)
+            self.set_parameters([Parameter('lna_gain', value=new_lna)])
+            with self._device_lock:
+                if self._hackrf is not None:
+                    self._hackrf.lna_gain = new_lna
+            self._agc_last_action = (
+                f'lna {lna}->{new_lna} @ cycle {self._agc_cycle_counter}')
+            self.get_logger().info(f'AGC: {self._agc_last_action}')
+        elif vga > 0:
+            new_vga = max(0, vga - AGC_VGA_STEP)
+            self.set_parameters([Parameter('vga_gain', value=new_vga)])
+            with self._device_lock:
+                if self._hackrf is not None:
+                    self._hackrf.vga_gain = new_vga
+            self._agc_last_action = (
+                f'vga {vga}->{new_vga} @ cycle {self._agc_cycle_counter}')
+            self.get_logger().info(f'AGC: {self._agc_last_action}')
+        else:
+            self._agc_last_action = 'at_minimum_gains'
+            return   # nothing to reduce
+
+        self._agc_hold_counter = AGC_HOLD_FRAMES
+
     def _fft_frame(self, iq: np.ndarray, sample_rate: float) -> np.ndarray:
         """Compute single-frame PSD (linear power) with corrections.
 
@@ -485,6 +548,8 @@ class HackRFLifecycleNode(LifecycleNode):
         msg.psd_db = psd_db.tolist()
         msg.noise_floor_db = float(np.median(psd_db))
         self._spectrum_pub.publish(msg)
+
+        self._agc_tick()
 
     # ------------------------------------------------------------------
     # Sweep service
@@ -635,6 +700,7 @@ class HackRFLifecycleNode(LifecycleNode):
                      str(self.get_parameter('sample_rate').value))
         stat.add('rx_overflows', str(self._rx_overflow_count))
         stat.add('adc_clips', str(self._clip_count))
+        stat.add('agc_last_action', self._agc_last_action)
         if self._activate_time is not None:
             stat.add('uptime_s',
                      f'{time.monotonic() - self._activate_time:.1f}')
