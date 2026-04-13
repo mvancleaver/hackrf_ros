@@ -684,7 +684,7 @@ from hackrf_ros.anomaly_detector import AnomalyDetector
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Cyclo_node topic output: enriched detections vs side-channel**
    - What we know: Two architectures are viable (enriched `/hackrf/detections_enriched` vs separate cyclo topic)
