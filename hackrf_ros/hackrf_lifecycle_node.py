@@ -39,6 +39,7 @@ from diagnostic_msgs.msg import DiagnosticStatus
 
 from hackrf_interfaces.msg import SpectrumStamped
 from hackrf_interfaces.srv import Sweep
+from std_srvs.srv import Trigger
 
 
 PARAM_RANGES = {
@@ -75,6 +76,10 @@ class HackRFLifecycleNode(LifecycleNode):
         self._last_rx_time: float = 0.0
         self._rx_overflow_count = 0
         self._clip_count = 0
+
+        # Recorder fan-out queue — None when not recording (per D-09, D-10)
+        self._recorder_q: queue.Queue | None = None
+        self._recorder_q_drops: int = 0
 
         # FFT state — Blackman window for -58 dB sidelobe suppression
         self._window = np.blackman(FFT_SIZE)
@@ -128,6 +133,15 @@ class HackRFLifecycleNode(LifecycleNode):
         self._sweep_srv = self.create_service(
             Sweep, '/hackrf/sweep', self._handle_sweep,
             callback_group=srv_group)
+
+        # Recording control services (per D-10, D-18)
+        rec_group = ReentrantCallbackGroup()
+        self._recording_start_srv = self.create_service(
+            Trigger, '/hackrf/recording/start',
+            self._handle_recording_start, callback_group=rec_group)
+        self._recording_stop_srv = self.create_service(
+            Trigger, '/hackrf/recording/stop',
+            self._handle_recording_stop, callback_group=rec_group)
 
         self._diag_updater = Updater(self)
         self._diag_updater.setHardwareID('hackrf_one')
@@ -346,6 +360,25 @@ class HackRFLifecycleNode(LifecycleNode):
             except queue.Full:
                 pass
             self._rx_overflow_count += 1
+
+        # Recorder fan-out (D-09, D-10): put_nowait; drop-oldest on full
+        rq = self._recorder_q  # snapshot ref under CPython GIL
+        if rq is not None:
+            try:
+                rq.put_nowait(chunk)
+            except queue.Full:
+                try:
+                    rq.get_nowait()  # drop oldest
+                except queue.Empty:
+                    pass
+                try:
+                    rq.put_nowait(chunk)
+                except queue.Full:
+                    pass
+                self._recorder_q_drops += 1
+                self.get_logger().warning(
+                    'Recorder queue full — dropped oldest IQ chunk')
+
         return False
 
     def _flush_queue(self):
@@ -606,6 +639,23 @@ class HackRFLifecycleNode(LifecycleNode):
             stat.add('uptime_s',
                      f'{time.monotonic() - self._activate_time:.1f}')
         return stat
+
+    def _handle_recording_start(self, request, response):
+        """Activate recorder fan-out queue (per D-10)."""
+        if self._recorder_q is None:
+            self._recorder_q = queue.Queue(maxsize=256)
+            self._recorder_q_drops = 0
+            self.get_logger().info('Recorder queue activated.')
+        response.success = True
+        response.message = 'Recording started'
+        return response
+
+    def _handle_recording_stop(self, request, response):
+        """Deactivate recorder fan-out queue (per D-10)."""
+        self._recorder_q = None
+        response.success = True
+        response.message = 'Recording stopped'
+        return response
 
     def _close_device(self):
         with self._device_lock:
