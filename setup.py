@@ -14,6 +14,7 @@ setup(
             'launch/hackrf.launch.py',
             'launch/spectrum.launch.py',
             'launch/sensor_pipeline.launch.py',
+            'launch/autonomy_pipeline.launch.py',
         ]),
         ('share/' + package_name + '/config', ['config/hackrf_rx.yaml']),
     ],
@@ -33,6 +34,7 @@ setup(
             'sweep_display = hackrf_ros.sweep_display:main',
             'cfar_node = hackrf_ros.cfar_node:main',
             'iq_recorder_node = hackrf_ros.iq_recorder_node:main',
+            'rf_map_node = hackrf_ros.rf_map_node:main',
         ],
     },
 )

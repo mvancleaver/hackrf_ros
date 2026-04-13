@@ -54,12 +54,16 @@ tf2_ros_mod.LookupException = Exception
 tf2_ros_mod.ExtrapolationException = Exception
 sys.modules.setdefault('tf2_ros', tf2_ros_mod)
 
-# std_msgs
+# std_msgs — use setdefault to avoid overwriting an existing mock, but always
+# ensure Header is present (other test mocks may omit it).
 std_msgs_mod = types.ModuleType('std_msgs')
 std_msgs_msg_mod = types.ModuleType('std_msgs.msg')
 std_msgs_msg_mod.Header = object
 sys.modules.setdefault('std_msgs', std_msgs_mod)
 sys.modules.setdefault('std_msgs.msg', std_msgs_msg_mod)
+# Ensure Header exists even if a prior test registered a minimal std_msgs.msg stub
+if not hasattr(sys.modules['std_msgs.msg'], 'Header'):
+    sys.modules['std_msgs.msg'].Header = object
 
 # nav_msgs
 nav_msgs_mod = types.ModuleType('nav_msgs')
@@ -68,6 +72,11 @@ nav_msgs_msg_mod.OccupancyGrid = object
 nav_msgs_msg_mod.MapMetaData = object
 sys.modules.setdefault('nav_msgs', nav_msgs_mod)
 sys.modules.setdefault('nav_msgs.msg', nav_msgs_msg_mod)
+# Ensure required classes exist in case a prior stub registered nav_msgs.msg
+if not hasattr(sys.modules['nav_msgs.msg'], 'OccupancyGrid'):
+    sys.modules['nav_msgs.msg'].OccupancyGrid = object
+if not hasattr(sys.modules['nav_msgs.msg'], 'MapMetaData'):
+    sys.modules['nav_msgs.msg'].MapMetaData = object
 
 # geometry_msgs
 geo_msgs_mod = types.ModuleType('geometry_msgs')
@@ -85,6 +94,9 @@ hi_msg_mod.RFDetectionArray = object
 hi_msg_mod.RFDetection = object
 sys.modules.setdefault('hackrf_interfaces', hi_mod)
 sys.modules.setdefault('hackrf_interfaces.msg', hi_msg_mod)
+# Ensure msg classes exist in case a prior stub was minimal
+if not hasattr(sys.modules['hackrf_interfaces.msg'], 'RFDetectionArray'):
+    sys.modules['hackrf_interfaces.msg'].RFDetectionArray = object
 
 # rcl_interfaces (needed by some ROS2 param declarations in imports)
 rcl_iface_mod = types.ModuleType('rcl_interfaces')
