@@ -40,7 +40,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.parameter import Parameter
 from rcl_interfaces.srv import SetParameters
 
-from hackrf_interfaces.msg import SpectrumStamped, RFDetectionArray
+from hackrf_interfaces.msg import SpectrumStamped, RFDetectionArray, RFEmitterMap
 from hackrf_interfaces.action import Sweep as SweepAction
 from hackrf_interfaces.action import RecordIQ as RecordIQAction
 
@@ -101,6 +101,11 @@ class HackRFSpectrumPlugin(Plugin):
             SpectrumStamped, '/hackrf/spectrum', self._spectrum_cb, qos_rel)
         self._node.create_subscription(
             RFDetectionArray, '/hackrf/detections', self._detections_cb, qos_rel)
+        self._node.create_subscription(
+            RFEmitterMap, '/hackrf/emitter_map', self._emitter_map_cb, qos_rel)
+        self._node.create_subscription(
+            RFDetectionArray, '/hackrf/cyclo_detections',
+            self._cyclo_detections_cb, qos_rel)
 
         self._sweep_client = ActionClient(
             self._node, SweepAction, '/hackrf/sweep')
@@ -121,6 +126,8 @@ class HackRFSpectrumPlugin(Plugin):
         self._lock = threading.Lock()
         self._spectrum_msg: SpectrumStamped | None = None
         self._detections_msg: RFDetectionArray | None = None
+        self._emitter_map_msg: RFEmitterMap | None = None
+        self._cyclo_detections_msg: RFDetectionArray | None = None
         # Sweep result: (freqs_mhz ndarray, psd_db ndarray) | None
         self._sweep_result: tuple | None = None
         # Feedback queue: (current_hop, total_hops, current_freq_hz)
@@ -155,12 +162,13 @@ class HackRFSpectrumPlugin(Plugin):
         root.setSpacing(4)
         self._widget.setLayout(root)
 
-        # Control row: [tune] [sweep] [recorder]
+        # Control row: [tune] [sweep] [recorder] [intel]
         ctrl = QHBoxLayout()
         ctrl.setSpacing(8)
         ctrl.addWidget(self._build_tune_group())
         ctrl.addWidget(self._build_sweep_group())
         ctrl.addWidget(self._build_recorder_group())
+        ctrl.addWidget(self._build_intel_group())
         root.addLayout(ctrl)
 
         # Plot
@@ -341,6 +349,37 @@ class HackRFSpectrumPlugin(Plugin):
         g.setLayout(lay)
         return g
 
+    def _build_intel_group(self) -> QGroupBox:
+        g = QGroupBox('RF Intel')
+        g.setStyleSheet(
+            f'QGroupBox {{ color: {_FG}; border: 1px solid #585b70; '
+            f'border-radius: 4px; margin-top: 6px; padding-top: 4px; }}'
+            f'QGroupBox::title {{ subcontrol-origin: margin; left: 8px; }}')
+        lay = QVBoxLayout()
+        lay.setSpacing(4)
+
+        # Anomaly status
+        self._intel_anomaly_lbl = QLabel('⚠ Anomalies: —')
+        self._intel_anomaly_lbl.setStyleSheet(f'color: {_FG}; font-size: 11px;')
+        lay.addWidget(self._intel_anomaly_lbl)
+
+        # Cyclo classification summary
+        self._intel_cyclo_lbl = QLabel('Cyclo: —')
+        self._intel_cyclo_lbl.setStyleSheet(f'color: {_FG}; font-size: 11px;')
+        lay.addWidget(self._intel_cyclo_lbl)
+
+        # Emitter map list
+        self._intel_emitter_lbl = QLabel('Emitters: none')
+        self._intel_emitter_lbl.setStyleSheet(
+            f'color: {_FG}; font-size: 10px; font-family: monospace;')
+        self._intel_emitter_lbl.setWordWrap(True)
+        self._intel_emitter_lbl.setMinimumWidth(180)
+        lay.addWidget(self._intel_emitter_lbl)
+
+        lay.addStretch()
+        g.setLayout(lay)
+        return g
+
     def _build_plot(self) -> FigureCanvas:
         self._figure = Figure(figsize=(12, 4), facecolor=_BG)
         self._canvas = FigureCanvas(self._figure)
@@ -375,6 +414,14 @@ class HackRFSpectrumPlugin(Plugin):
     def _detections_cb(self, msg: RFDetectionArray) -> None:
         with self._lock:
             self._detections_msg = msg
+
+    def _emitter_map_cb(self, msg: RFEmitterMap) -> None:
+        with self._lock:
+            self._emitter_map_msg = msg
+
+    def _cyclo_detections_cb(self, msg: RFDetectionArray) -> None:
+        with self._lock:
+            self._cyclo_detections_msg = msg
 
     # ── Tune control ──────────────────────────────────────────────────────────
 
@@ -628,6 +675,8 @@ class HackRFSpectrumPlugin(Plugin):
             smsg = self._spectrum_msg
             self._spectrum_msg = None
             dmsg = self._detections_msg
+            emitter_map = self._emitter_map_msg
+            cyclo_msg = self._cyclo_detections_msg
             sweep_res = self._sweep_result
             self._sweep_result = None
 
@@ -737,34 +786,108 @@ class HackRFSpectrumPlugin(Plugin):
             y_top = self._y_max
             span_h = y_top - y_bot
 
+            # Build cyclo lookup: detection_id → (classification, confidence)
+            cyclo_by_id: dict[int, tuple[str, float]] = {}
+            if cyclo_msg is not None:
+                for cd in cyclo_msg.detections:
+                    if cd.cyclo_classification:
+                        cyclo_by_id[cd.detection_id] = (
+                            cd.cyclo_classification, cd.cyclo_confidence)
+
+            anomaly_types: list[str] = []
+            cyclo_counts: dict[str, int] = {}
+
             for det in dmsg.detections:
                 c_mhz  = det.center_frequency_hz / 1e6
                 bw_mhz = max(det.bandwidth_hz / 1e6, 0.1)
                 lo = c_mhz - bw_mhz / 2
                 hi = c_mhz + bw_mhz / 2
-                clr = _CLASSIFY_COLOR.get(det.classification, '#6c7086')
+
+                is_anomaly = getattr(det, 'is_anomaly', False)
+                anomaly_type = getattr(det, 'anomaly_type', '')
+
+                # Anomaly: RED border, higher opacity; normal: classification color
+                if is_anomaly:
+                    clr = _RED
+                    rect_alpha = 0.28
+                    edge_lw = 2.0
+                    if anomaly_type:
+                        anomaly_types.append(anomaly_type)
+                else:
+                    clr = _CLASSIFY_COLOR.get(det.classification, '#6c7086')
+                    rect_alpha = 0.18
+                    edge_lw = 1.2
 
                 rect = Rectangle(
                     (lo, y_bot), hi - lo, span_h,
-                    linewidth=1.2, edgecolor=clr, facecolor=clr,
-                    alpha=0.18, zorder=4)
+                    linewidth=edge_lw, edgecolor=clr, facecolor=clr,
+                    alpha=rect_alpha, zorder=4)
                 self._ax.add_patch(rect)
                 self._det_patches.append(rect)
 
                 edge = self._ax.axvline(
-                    c_mhz, color=clr, linewidth=0.8, alpha=0.6, zorder=5)
+                    c_mhz, color=clr, linewidth=0.8 if not is_anomaly else 1.2,
+                    alpha=0.6, zorder=5)
                 self._det_patches.append(edge)
+
+                # Label: base classification, cyclo override, anomaly flag
+                cyclo_info = cyclo_by_id.get(det.detection_id)
+                if cyclo_info:
+                    cyclo_cls, cyclo_conf = cyclo_info
+                    cyclo_counts[cyclo_cls] = cyclo_counts.get(cyclo_cls, 0) + 1
+                    band_line = f'{cyclo_cls} ({cyclo_conf:.0%})'
+                else:
+                    band_line = det.classification
+
+                prefix = '⚠ ' if is_anomaly else ''
+                lbl_text = f'{prefix}{band_line}\n{det.power_dbm:.0f} dBm'
 
                 lbl = self._ax.text(
                     c_mhz, y_top - span_h * 0.06,
-                    f'{det.classification}\n{det.power_dbm:.0f} dBm',
+                    lbl_text,
                     color=clr, fontsize=7, ha='center', va='top',
                     zorder=6, clip_on=True,
                     bbox=dict(boxstyle='round,pad=0.2', facecolor=_BG,
                               edgecolor=clr, alpha=0.8, linewidth=0.8))
                 self._det_labels.append(lbl)
 
+            # ── Intel panel: anomaly summary ───────────────────────────
+            n_anom = len(anomaly_types)
+            if n_anom == 0:
+                anom_txt = 'Anomalies: none'
+                self._intel_anomaly_lbl.setStyleSheet(
+                    f'color: {_FG}; font-size: 11px;')
+            else:
+                unique = ', '.join(sorted(set(anomaly_types)))
+                anom_txt = f'⚠ Anomalies: {n_anom}  [{unique}]'
+                self._intel_anomaly_lbl.setStyleSheet(
+                    f'color: {_RED}; font-size: 11px; font-weight: bold;')
+            self._intel_anomaly_lbl.setText(anom_txt)
+
+            # ── Intel panel: cyclo summary ─────────────────────────────
+            if cyclo_counts:
+                parts = [f'{k}×{v}' for k, v in sorted(cyclo_counts.items())]
+                self._intel_cyclo_lbl.setText('Cyclo: ' + '  '.join(parts))
+            elif cyclo_msg is not None:
+                self._intel_cyclo_lbl.setText('Cyclo: no ISM signals')
+            else:
+                self._intel_cyclo_lbl.setText('Cyclo: —')
+
             redraw = True
+
+        # ── Intel panel: emitter map ───────────────────────────────────────
+        if emitter_map is not None:
+            ests = emitter_map.estimates
+            if not ests:
+                self._intel_emitter_lbl.setText('Emitters: none')
+            else:
+                lines = [f'Emitters: {len(ests)} located']
+                for e in ests:
+                    lines.append(
+                        f'  #{e.detection_id}: '
+                        f'({e.estimated_x:.1f}, {e.estimated_y:.1f}) m'
+                        f'  n={e.observation_count}')
+                self._intel_emitter_lbl.setText('\n'.join(lines))
 
         if redraw:
             self._canvas.draw()

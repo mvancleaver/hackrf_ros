@@ -16,6 +16,7 @@ setup(
             'launch/sensor_pipeline.launch.py',
             'launch/autonomy_pipeline.launch.py',
             'launch/multi_radio.launch.py',
+            'launch/intel_pipeline.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/hackrf_rx.yaml',

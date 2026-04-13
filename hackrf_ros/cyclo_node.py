@@ -39,7 +39,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from std_msgs.msg import Float32MultiArray
-from hackrf_interfaces.msg import RFDetectionArray, RFDetection
+from hackrf_interfaces.msg import RFDetectionArray, RFDetection, SpectrumStamped
 
 
 # ---------------------------------------------------------------------------
@@ -187,14 +187,30 @@ class CycloNode(Node):
         # Track active 2.4 GHz detections
         self._active_ism_detections: list[RFDetection] = []
         self._last_detections_arr = None  # RFDetectionArray, for re-publishing
-        # Latest IQ chunk available for classification
+        # Latest IQ chunk and the center frequency + sample rate it was captured at.
+        # Used to gate classification: only classify detections whose center_frequency_hz
+        # falls within [_iq_center_hz ± _iq_sample_rate_hz/2] so sweep-mode detections
+        # from a different hop are not classified against the wrong IQ data.
         self._latest_iq: np.ndarray | None = None
+        self._iq_center_hz: float = 0.0       # center freq when IQ was captured
+        self._iq_sample_rate_hz: float = 20e6  # sample rate when IQ was captured
 
         # Subscriber: IQ stream (BEST_EFFORT — high rate, drop is OK)
         self._iq_sub = self.create_subscription(
             Float32MultiArray,
             '/hackrf/iq',
             self._iq_callback,
+            qos_best_effort,
+            callback_group=cb_group,
+        )
+
+        # Subscriber: spectrum — used only to track the current center frequency
+        # and sample rate so IQ chunks can be frequency-tagged without changing
+        # the Float32MultiArray message type.
+        self._spectrum_sub = self.create_subscription(
+            SpectrumStamped,
+            '/hackrf/spectrum',
+            self._spectrum_callback,
             qos_best_effort,
             callback_group=cb_group,
         )
@@ -220,6 +236,16 @@ class CycloNode(Node):
             f'{self.get_parameter("confidence_threshold").value}'
         )
 
+    def _spectrum_callback(self, msg: SpectrumStamped) -> None:
+        """Track center frequency and sample rate of the live IQ stream.
+
+        SpectrumStamped and /hackrf/iq are produced synchronously by the driver,
+        so this gives an accurate frequency tag for the IQ cache without changing
+        the Float32MultiArray message type.
+        """
+        self._iq_center_hz = float(msg.center_frequency_hz)
+        self._iq_sample_rate_hz = float(msg.sample_rate_hz)
+
     def _iq_callback(self, msg: Float32MultiArray) -> None:
         """Cache latest IQ chunk for use by _detections_callback."""
         data = np.array(msg.data, dtype=np.float32)
@@ -231,26 +257,41 @@ class CycloNode(Node):
         """Cache latest detections, run cyclo classifier, publish enriched array.
 
         Publishes unconditionally. Cyclo fields are populated only for 2.4 GHz ISM
-        detections when cyclo_confidence >= confidence_threshold (D-10).
+        detections when cyclo_confidence >= confidence_threshold (D-10) AND the
+        detection's center frequency falls within the IQ cache's capture window
+        [_iq_center_hz ± _iq_sample_rate_hz/2].  This guard makes classification
+        correct during wideband sweeps where the IQ cache may be from a different
+        hop than the detection.
         All other detections pass through with default cyclo fields.
         """
         self._last_detections_arr = msg
         ism_lo = float(self.get_parameter('ism_min_hz').value)
         ism_hi = float(self.get_parameter('ism_max_hz').value)
+        threshold = float(self.get_parameter('confidence_threshold').value)
+
+        # Half-bandwidth of the IQ capture window (used per-detection below)
+        half_bw = self._iq_sample_rate_hz / 2.0
+
+        # Run cyclo once if any ISM detection is within the IQ window
+        iq_label = ''
+        iq_confidence = 0.0
+        if self._latest_iq is not None:
+            in_window = [
+                det for det in msg.detections
+                if (ism_lo <= det.center_frequency_hz <= ism_hi
+                    and abs(det.center_frequency_hz - self._iq_center_hz) <= half_bw)
+            ]
+            if in_window:
+                iq_label, iq_confidence = cyclo_classify(self._latest_iq)
+                self.get_logger().debug(
+                    f'Cyclo [{self._iq_center_hz/1e6:.1f} MHz window]: '
+                    f'{iq_label!r} conf={iq_confidence:.2f}'
+                )
+
         self._active_ism_detections = [
             det for det in msg.detections
             if ism_lo <= det.center_frequency_hz <= ism_hi
         ]
-
-        # Run cyclo classifier if ISM detections are active AND IQ is available
-        label = ''
-        confidence = 0.0
-        threshold = float(self.get_parameter('confidence_threshold').value)
-        if self._active_ism_detections and self._latest_iq is not None:
-            label, confidence = cyclo_classify(self._latest_iq)
-            self.get_logger().debug(
-                f'Cyclo: classified ISM signal as {label!r} (conf={confidence:.2f})'
-            )
 
         # Build enriched detection array — publish unconditionally
         enriched_arr = RFDetectionArray()
@@ -271,11 +312,16 @@ class CycloNode(Node):
             new_det.detection_id = det.detection_id
             new_det.is_anomaly = det.is_anomaly
             new_det.anomaly_type = det.anomaly_type
-            # Populate cyclo fields only for 2.4 GHz ISM detections that meet threshold
+            # Populate cyclo fields only when:
+            #   1. Detection is in ISM 2.4 GHz band
+            #   2. Detection center freq is within the IQ capture window
+            #   3. Classification confidence meets threshold
+            det_in_window = abs(det.center_frequency_hz - self._iq_center_hz) <= half_bw
             if (ism_lo <= det.center_frequency_hz <= ism_hi
-                    and label != '' and confidence >= threshold):
-                new_det.cyclo_classification = label
-                new_det.cyclo_confidence = float(confidence)
+                    and det_in_window
+                    and iq_label != '' and iq_confidence >= threshold):
+                new_det.cyclo_classification = iq_label
+                new_det.cyclo_confidence = float(iq_confidence)
             else:
                 # Forward existing cyclo fields unchanged (or defaults)
                 new_det.cyclo_classification = det.cyclo_classification

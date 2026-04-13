@@ -250,7 +250,7 @@ class EmitterLocNode(Node):
                 timeout=rclpy.duration.Duration(seconds=0.05),
             )
         except (LookupException, ExtrapolationException) as e:
-            self.get_logger().warn(f'TF lookup failed: {e}', throttle_duration_sec=5.0)
+            self.get_logger().warn(f'TF lookup failed: {e}', throttle_duration_sec=30.0)
             return
 
         robot_x = tf_stamped.transform.translation.x
