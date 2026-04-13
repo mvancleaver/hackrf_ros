@@ -1,108 +1,99 @@
-# HackRF ROS2 Driver
+# HackRF ROS2 RF Sensor
 
 ## What This Is
 
-A robust ROS2 driver for the HackRF One SDR running Mayhem firmware (Portapack). It provides full device control — RX streaming, TX with authorization guardrails, and Mayhem app management — through both ROS2 topics and a Redis interface. The driver communicates via pyhackrf2 for IQ streaming and serial (/dev/ttyACM1) for Mayhem-specific commands.
+A ROS2 sensor package that turns a HackRF One SDR into a robot's primary RF awareness system. It captures IQ data, computes calibrated power spectral density, detects and classifies RF signals, and publishes actionable spectrum intelligence for autonomy nodes. Platform-agnostic — works on ground robots, drones, and stationary monitors.
 
 ## Core Value
 
-Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX operations gated behind explicit authorization.
+Reliable, calibrated RF spectrum awareness published as standard ROS2 messages that any robot autonomy stack can consume for signal detection, classification, and RF environment mapping.
 
 ## Requirements
 
 ### Validated
 
-- v ROS2 node publishes IQ data from HackRF — existing
-- v ROS2 parameter-based device configuration (frequency, gain, sample rate) — existing
-- v Real-time IQ visualization node (plotter) — existing
-- v Docker deployment with USB device passthrough — existing
-- v Robust RX pipeline: thread-safe dual-queue buffering, USB error recovery with exponential backoff, automatic reconnection — Phase 1
-- v Proper conventions: HackRFNode class, structured logging, parameter validation (hardware ranges), no bare print() — Phase 1
-- v Graceful lifecycle management: clean startup without device, ordered shutdown, deadlock-safe reconfiguration — Phase 1
-- v Serial Mayhem control: MayhemSerial helper class with daemon reader thread, applist/appstart/setfreq/radioinfo commands — Phase 2
-- v Mayhem app management: ROS2 services for app switching, frequency control, and radioinfo queries — Phase 2
-- v Mode coexistence: empirical verification of pyhackrf2 + Mayhem serial concurrent operation — Phase 2
-
-- v Redis IQ publishing: RedisBridge daemon thread streams float32 IQ to hackrf:iq:stream with configurable MAXLEN — Phase 3
-- v Redis device state: hackrf:state hash with config, streaming status, and Mayhem state updated on change — Phase 3
-- v Redis command interface: JSON commands via hackrf:cmd stream dispatched to 9 action handlers — Phase 3
-
-- v TX capability: TXController with pyhackrf2 start_tx(), buffer-based TX, float32->int8 conversion, half-duplex RX pause/resume — Phase 4
-- v TX authorization guardrails: one-token-per-TX via Lua GETDEL, frequency allowlist with ALWAYS_BLOCKED (EPIRB/ADS-B), per-session antenna confirmation, TX stop on shutdown — Phase 4
-
-- v Standalone pymayhem package: pip-installable serial control for PortaPack with domain-organized API (radio, ui, fs, sensors, system), no ROS2/Redis dependency — Phase 5
-- v Redis-native HackRF driver: hackrf_driver package with HackRFDriver main loop, TXController, RedisBridge — no rclpy dependency in core — Phase 5
-- v Thin ROS2 bridge: BridgeNode reads IQ from Redis Pub/Sub, publishes to /hackrf/iq and /hackrf/state, exposes services for commands — no hardware imports — Phase 5
-- v Full test regression: 135 tests across 3 packages (pymayhem, hackrf_driver, test/) with zero failures — Phase 5
+- ✓ Lifecycle driver node with pyhackrf2 (configure/activate/deactivate/shutdown) — existing
+- ✓ Calibrated PSD publishing (Blackman window, linear averaging, V^2/Hz, DC/IQ correction) — existing
+- ✓ Dynamic retuning via ROS2 parameters (center_freq, sample_rate, gains) — existing
+- ✓ Wideband sweep service with Tukey-blended stitching — existing
+- ✓ ADC clipping detection and frame discard — existing
+- ✓ Hardware diagnostics via /diagnostics topic — existing
+- ✓ Live spectrum display nodes — existing
+- ✓ Docker deployment with CycloneDDS on Jetson ARM64 — existing
 
 ### Active
 
-## Current Milestone: v2.0 Hardening, Observability & Signal Capabilities
-
-**Goal:** Make the driver production-reliable with proper error handling, add operational observability, then extend with IQ recording, spectral analysis, frequency hopping, and async pymayhem.
-
-**Target features:**
-- Custom exceptions and input validation across pymayhem and hackrf_driver
-- Device health watchdog and IQ sequence numbers
-- Redis reconnection in BridgeNode, antenna confirmation ROS2 service
-- Observability metrics published to Redis
-- Dead-letter queue, TX dry-run validation
-- Legacy HackRFNode cleanup and documentation
-- IQ recording to SigMF/raw files
-- Headless spectral analysis (FFT + waterfall) to Redis and /hackrf/spectrum ROS2 topic
-- Programmable frequency hopping scheduler
-- pymayhem async API (asyncio)
+- [ ] Stamped messages (SpectrumStamped.msg) with header.stamp and frame_id
+- [ ] TF frame integration (configurable antenna frame)
+- [ ] CFAR energy detector node publishing RFDetectionArray
+- [ ] Signal persistence tracker (multi-frame confirmation, ID assignment)
+- [ ] Band classification lookup (frequency + bandwidth heuristics)
+- [ ] QoS cleanup (BEST_EFFORT for PSD stream, non-blocking param callback)
+- [ ] RF occupancy grid (2D heatmap for nav stack integration)
+- [ ] Sweep action server (progress feedback, cancel support)
+- [ ] IQ recording action server (SigMF format with robot pose metadata)
+- [ ] Automatic gain control (adapt LNA/VGA to environment)
+- [ ] Multi-observation emitter localization (power + position estimates)
+- [ ] Wideband anomaly detection (baseline PSD, flag deviations)
+- [ ] Cyclostationary feature extraction (WiFi/BLE/ZigBee disambiguation)
+- [ ] KrakenSDR direction finding integration (4-channel coherent AOA)
+- [ ] Multi-radio architecture (HackRF sweeps, second SDR tracks)
 
 ### Out of Scope
 
-- Web UI or dashboard — Redis consumers can build their own
-- Signal processing / demodulation — out of scope for the driver layer
-- Multi-device support — single HackRF One target
-- Custom Mayhem firmware modifications — work with existing Mayhem serial protocol
+- TX transmission — removed during rescope, separate safety concern
+- Mayhem firmware serial control — separate package (pymayhem)
+- Redis IQ streaming — replaced by ROS2 topics
+- GUI applications — display nodes are optional subscribers, not core
 
 ## Context
 
-- **Existing codebase**: Working prototype ROS2 driver using pyhackrf2 with IQ publisher and plotter nodes
-- **Mayhem firmware**: Portapack runs Mayhem firmware exposing serial interface at /dev/ttyACM1 alongside standard USB
-- **Dual interface**: pyhackrf2 handles IQ bulk transfer (libusb), serial handles Mayhem-specific commands (app control, TX)
-- **Known issues**: Class name typo (HackRFPuiblisherNode), no thread safety on sample buffer, minimal parameter validation, race conditions between RX callback and timer threads
-- **Deployment**: Docker container on host with USB passthrough, tested on x86_64 and Jetson ARM64
-- **Redis**: Running on the host, used as the primary data and command interface for external consumers
+- **Hardware**: HackRF One (1 MHz–6 GHz, 20 MSPS, 8-bit ADC), Portapack with Mayhem firmware
+- **Platform**: Jetson ARM64 in Docker, ROS2 Humble, CycloneDDS
+- **Prior work**: Started as monolithic ROS2 driver with Redis/Mayhem/TX. Rescoped to focused lifecycle node. RF/EW engineering review corrected PSD pipeline (see docs/rf-ew-review.md)
+- **RF/EW review findings**: Fixed PSD normalization, averaging domain, DC offset, I/Q imbalance, window choice, sweep stitching. Optimized gain parameters.
+- **Inter-process DDS**: FastRTPS fails on this ARM64 system. CycloneDDS works. Lifecycle publishers don't transmit over DDS — use regular publishers.
+- **Robot platforms**: Must support ground robots, drones, and stationary monitors. TF frame and message stamps enable platform-agnostic integration.
 
 ## Constraints
 
-- **Hardware**: Single HackRF One with Portapack running Mayhem firmware
-- **Device path**: Serial interface at /dev/ttyACM1 (Mayhem), USB bulk via libusb (pyhackrf2)
-- **Framework**: ROS2 Humble with Python (rclpy)
-- **Data store**: Redis on host for IQ data, device state, and command interface
-- **Safety**: TX operations must be gated behind explicit authorization — no accidental transmissions
-- **Compatibility**: Must work in existing Docker deployment (empyreanlattice/hackrf_ros:humble)
+- **Hardware**: Single HackRF One, 8-bit ADC limits dynamic range to ~50 dB
+- **Bandwidth**: 20 MHz instantaneous — wideband coverage requires frequency hopping
+- **Platform**: Must run in Docker on Jetson ARM64 (ARM NEON, no x86 SIMD)
+- **DDS**: CycloneDDS required — FastRTPS broken on this platform
+- **Real-time**: Python FFT at edge of throughput (4% of captured data processed). Performance-critical paths may need pyfftw or C++
+- **Direction finding**: Requires KrakenSDR hardware (Phase 4) — single HackRF has no AOA capability
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Keep pyhackrf2 for IQ streaming | Already working, uses efficient USB bulk transfers via libhackrf | -- Pending |
-| Serial for Mayhem control | Mayhem firmware exposes ACM serial interface for app/TX control | -- Pending |
-| Redis as external interface | User wants IQ data + state + commands accessible outside ROS2 | -- Pending |
-| TX requires authorization | Safety critical — prevent accidental transmissions | -- Pending |
+| Rescope from monolith to lifecycle node | Original 2800-line codebase too complex, mixed concerns | ✓ Good |
+| Drop Redis/Mayhem/TX from core | Separate concerns, reduce complexity | ✓ Good |
+| Blackman window over Hann | -58 dB sidelobes for wideband survey dynamic range | ✓ Good |
+| LNA=16, VGA=20, amp=off defaults | RF/EW review: prevents ADC saturation, optimal dynamic range | ✓ Good |
+| Regular publishers over lifecycle publishers | Lifecycle publishers don't transmit over CycloneDDS on ARM64 | ✓ Good |
+| Retune while streaming (no stop/start_rx) | Avoids libhackrf segfault on rapid frequency changes | ✓ Good |
+| CycloneDDS over FastRTPS | FastRTPS broken for inter-process on this ARM64 Jetson | ✓ Good |
+| SigMF for IQ recording | Standard format, zero conversion overhead, tooling support | — Pending |
+| CFAR for detection | Standard ES technique, low compute, works on PSD directly | — Pending |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
-**After each phase transition** (via `/gsd:transition`):
-1. Requirements invalidated? -> Move to Out of Scope with reason
-2. Requirements validated? -> Move to Validated with phase reference
-3. New requirements emerged? -> Add to Active
-4. Decisions to log? -> Add to Key Decisions
-5. "What This Is" still accurate? -> Update if drifted
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
 
-**After each milestone** (via `/gsd:complete-milestone`):
+**After each milestone** (via `/gsd-complete-milestone`):
 1. Full review of all sections
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-30 — Milestone v2.0 started*
+*Last updated: 2026-04-13 after project initialization*
