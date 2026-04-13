@@ -96,6 +96,10 @@ class HackRFLifecycleNode(LifecycleNode):
         self._recorder_q: queue.Queue | None = None
         self._recorder_q_drops: int = 0
 
+        # Async parameter application — work queue + background worker (REL-02)
+        self._param_queue: queue.Queue = queue.Queue(maxsize=4)
+        self._param_worker_thread: threading.Thread | None = None
+
         # FFT state — Blackman window for -58 dB sidelobe suppression
         self._window = np.blackman(FFT_SIZE)
         self._window_S2 = np.sum(self._window ** 2)  # incoherent power norm
@@ -188,6 +192,17 @@ class HackRFLifecycleNode(LifecycleNode):
         self._flush_queue()
 
         self._timer = self.create_timer(0.05, self._process_and_publish)
+
+        # Flush stale param work items before starting fresh
+        while not self._param_queue.empty():
+            try:
+                self._param_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._param_worker_thread = threading.Thread(
+            target=self._param_worker, daemon=True, name='hackrf_param_worker')
+        self._param_worker_thread.start()
+
         self.get_logger().info('Active.')
         return TransitionCallbackReturn.SUCCESS
 
@@ -204,6 +219,16 @@ class HackRFLifecycleNode(LifecycleNode):
                 except (RuntimeError, OSError) as e:
                     self.get_logger().warning(f'stop_rx error: {e}')
                 self._is_streaming = False
+
+        # Signal param worker to exit and wait briefly
+        if self._param_worker_thread is not None and self._param_worker_thread.is_alive():
+            try:
+                self._param_queue.put_nowait(None)  # sentinel
+            except queue.Full:
+                pass
+            self._param_worker_thread.join(timeout=2.0)
+            self._param_worker_thread = None
+
         self._activate_time = None
         self.get_logger().info('Deactivated.')
         return TransitionCallbackReturn.SUCCESS
@@ -281,6 +306,10 @@ class HackRFLifecycleNode(LifecycleNode):
             ParameterDescriptor(description='Antenna Z offset from parent_frame (m)'))
 
     def _param_callback(self, params: list[Parameter]) -> SetParametersResult:
+        """Validate params and enqueue hardware application (REL-02).
+
+        Returns immediately — hardware apply runs in _param_worker thread.
+        """
         needs_restart = False
         pending = {}
         for param in params:
@@ -296,16 +325,39 @@ class HackRFLifecycleNode(LifecycleNode):
                 needs_restart = True
             pending[name] = value
 
-        if self._hackrf is not None:
+        if self._hackrf is not None and pending:
+            try:
+                self._param_queue.put_nowait((pending, needs_restart))
+            except queue.Full:
+                self.get_logger().warning(
+                    'Param queue full — param change may be delayed')
+
+        return SetParametersResult(successful=True)
+
+    def _param_worker(self) -> None:
+        """Background thread: applies parameter changes to HackRF hardware (REL-02).
+
+        Drains _param_queue. Sentinel value None causes thread to exit.
+        Retry logic for stop_rx/start_rx lives here — NOT in the executor thread.
+        """
+        while True:
+            try:
+                item = self._param_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if item is None:   # shutdown sentinel
+                break
+            pending, needs_restart = item
             with self._device_lock:
-                if needs_restart and self._is_streaming:
+                if needs_restart and self._is_streaming and self._hackrf is not None:
                     try:
                         self._hackrf.stop_rx()
                         self._is_streaming = False
                     except (RuntimeError, OSError) as e:
                         self.get_logger().warning(f'stop_rx for retune: {e}')
-                self._apply_pending(pending)
-                if needs_restart and not self._is_streaming:
+                if self._hackrf is not None:
+                    self._apply_pending(pending)
+                if needs_restart and not self._is_streaming and self._hackrf is not None:
                     for attempt, settle in enumerate([0.15, 0.3, 0.5]):
                         time.sleep(settle)
                         try:
@@ -316,14 +368,11 @@ class HackRFLifecycleNode(LifecycleNode):
                         except (RuntimeError, OSError) as e:
                             if attempt == 2:
                                 self.get_logger().error(
-                                    f'start_rx failed: {e}')
-                                return SetParametersResult(
-                                    successful=False,
-                                    reason=f'Failed to restart RX: {e}')
+                                    f'start_rx after retune failed: {e}')
+            # Reset PSD accumulator after any param change
             self._psd_accum[:] = 0
             self._accum_count = 0
-
-        return SetParametersResult(successful=True)
+            self._param_queue.task_done()
 
     def _apply_pending(self, pending: dict):
         if 'center_frequency' in pending:
