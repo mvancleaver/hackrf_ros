@@ -122,12 +122,14 @@ class HackRFLifecycleNode(LifecycleNode):
 
         try:
             import pyhackrf2
-            self._hackrf = pyhackrf2.HackRF()
+            device_index = int(self.get_parameter('device_index').value)
+            self._hackrf = pyhackrf2.HackRF(device_index=device_index)
         except ImportError:
             self.get_logger().error('pyhackrf2 not installed.')
             return TransitionCallbackReturn.FAILURE
         except (RuntimeError, OSError) as e:
-            self.get_logger().error(f'Failed to open HackRF: {e}')
+            self.get_logger().error(
+                f'Failed to open HackRF at device_index={device_index}: {e}')
             return TransitionCallbackReturn.FAILURE
 
         self._apply_params_to_device()
@@ -298,6 +300,8 @@ class HackRFLifecycleNode(LifecycleNode):
                     from_value=0, to_value=62, step=0)]))
         self.declare_parameter('amp_enabled', False,
             ParameterDescriptor(description='RF amplifier (adds ~11 dB gain + noise)'))
+        self.declare_parameter('device_index', 0,
+            ParameterDescriptor(description='HackRF device index (0-based, for multi-radio)'))
 
         # TF frame parameters (D-07, D-08)
         self.declare_parameter('antenna_frame', 'hackrf_antenna',
