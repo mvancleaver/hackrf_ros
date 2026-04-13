@@ -57,8 +57,8 @@ hi_msg_mod.RFDetectionArray = object
 hi_msg_mod.RFDetection = object
 hi_msg_mod.RFEmitterMap = object
 hi_msg_mod.RFEmitterEstimate = object
-sys.modules.setdefault('hackrf_interfaces', hi_mod)
-sys.modules.setdefault('hackrf_interfaces.msg', hi_msg_mod)
+sys.modules['hackrf_interfaces'] = hi_mod
+sys.modules['hackrf_interfaces.msg'] = hi_msg_mod
 
 # ---------------------------------------------------------------------------
 # Now import helpers under test
