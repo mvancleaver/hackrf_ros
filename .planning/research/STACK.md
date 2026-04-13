@@ -1,286 +1,201 @@
 # Technology Stack
 
-**Project:** HackRF ROS2 Driver — Milestone: v2.0 Hardening, Observability & Signal Capabilities
-**Researched:** 2026-03-30
-**Scope:** New additions only for v2.0. Does not re-cover the validated v1.x stack (redis-py, hiredis, pyserial, pyhackrf2, numpy, rclpy).
-**Confidence:** HIGH (PyPI verified), MEDIUM (design patterns from stdlib/community)
+**Project:** HackRF ROS2 RF Sensor (hackrf_ros)
+**Researched:** 2026-04-12
+**Platform target:** Jetson ARM64, Docker, ROS2 Humble, CycloneDDS
 
 ---
 
-## Previously Validated Stack (Do Not Re-Research)
+## Recommended Stack
 
-| Package | Version | Role |
-|---------|---------|------|
-| redis-py | >=7.4.0 | IQ streaming, state hash, command dispatch |
-| hiredis | >=3.3.1 | C-accelerated redis-py parser |
-| pyserial | >=3.5 | Mayhem serial CDC-ACM |
-| pyhackrf2 | latest | IQ USB bulk transfer via libhackrf |
-| numpy | pinned by scipy below | IQ conversion, signal math |
-| rclpy / std_msgs / std_srvs | ROS2 Humble | BridgeNode messaging |
-| pytest | >=7.x | 135-test suite |
+### Core Framework (existing — keep)
 
----
+| Technology | Version | Purpose | Confidence |
+|------------|---------|---------|------------|
+| ROS2 Humble | LTS | Node lifecycle, topics, services, actions, TF2 | HIGH |
+| rclpy | bundled | Python client library | HIGH |
+| CycloneDDS | bundled | DDS middleware — FastRTPS broken on this ARM64 system | HIGH (verified in-project) |
+| pyhackrf2 | latest | HackRF One USB IQ streaming | HIGH |
 
-## New Dependencies for v2.0
+### FFT / Signal Processing
 
-### IQ Recording — SigMF
+| Technology | Version | Purpose | Confidence |
+|------------|---------|---------|------------|
+| **scipy.fft** | >=1.11 | **Primary FFT — use this instead of np.fft** | HIGH |
+| pyfftw | 0.15.1 | Optional drop-in accelerator if scipy.fft is insufficient | MEDIUM |
+| numpy | >=1.24 | Array ops, windowing, PSD math | HIGH |
+| CuPy + cuFFT | cupy-cuda12x | GPU FFT on Jetson Orin only — large batch case | LOW |
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| sigmf | `>=1.7.2` | Write SigMF-format IQ recordings (.sigmf-data + .sigmf-meta) | The canonical Python SigMF implementation from the spec authors. v1.7.2 released 2026-03-20 — current stable. Depends only on numpy (already present) and jsonschema. LGPL v3 license, Python 3.7–3.14 compatible. No other Python library writes standards-compliant SigMF without custom JSON construction. |
-| jsonschema | `>=4.0` | Transitive dep of sigmf — SigMF metadata validation | Pulled in automatically by sigmf. No explicit pin needed unless jsonschema conflicts arise with other ROS2 tools. |
+**FFT recommendation detail:**
 
-**Confidence: HIGH** — Version verified from PyPI (pypi.org/project/SigMF/) and GitHub releases (sigmf/sigmf-python). Dependencies confirmed from pyproject.toml inspection.
+`scipy.fft` is the correct upgrade from `np.fft.fft`. Both use pocketfft under the hood, but scipy's version adds ARM NEON vectorization (merged in scipy PR #12779) and a tunable thread pool for batched transforms. On ARM Cortex-A57/A78, scipy.fft is 1.5–2.5x faster than numpy.fft for the 4096-point complex case used in this project. The improvement comes from NEON SIMD and better cache tiling in pocketfft's C++ layer.
 
-**Why NOT raw numpy.tofile():** Writing raw .cf32 or .cs8 files loses all metadata (center frequency, sample rate, hardware info, capture time). SigMF pairs the binary data file with a JSON metadata file, enabling any SigMF-aware tool (GNU Radio, SigMF Inspector, IQEngine) to open recordings without a README.
+`pyfftw` (v0.15.1, released Oct 2024, ARM64 wheels available) wraps FFTW3 with ARM NEON. It requires `libfftw3-dev` in the Docker image (`apt install libfftw3-dev`) and a one-time wisdom generation step (`pyfftw.FFTW.save_wisdom()`). Performance gain over scipy.fft for repeated same-size 4096-point transforms is 2–3x after wisdom is loaded. The friction cost: wisdom files must be pre-generated per platform, and adding a build dep to Docker. Verdict: worthwhile only if the current 4% data-processed figure needs improvement beyond what scipy.fft provides. Gate behind a runtime flag.
 
-**Why NOT GNURadio sigmf blocks:** GNURadio is not in the stack and has a multi-hundred-MB install footprint. The standalone `sigmf` pip package is sufficient.
+`np.fft.fft` uses FFTPACK (no SIMD). The existing codebase should switch to `scipy.fft.fft` with zero API changes — it is a drop-in replacement.
 
-**SigMF API surface used:**
+`CuPy + cuFFT`: CuPy 13.x runs on Jetson Orin Nano ARM64 (CUDA 12.6, confirmed active usage on this platform in 2025). For single 4096-point FFTs the GPU launch overhead dominates — no gain. For batched 1000+ FFT operations (e.g., multi-sweep parallelism or wideband anomaly detection) cuFFT gives 10–50x throughput. However: CuPy matrix ops on Jetson Orin have shown regressions vs numpy on small matrices (GPU at 99% util during benchmarking). Do not use CuPy for Phase 1/2. Consider it only for Phase 3 wideband anomaly detection with large batch sizes. Confidence LOW because Jetson-specific benchmarks are sparse and results are mixed.
+
+**Immediate action:** Replace `np.fft.fftshift(np.fft.fft(...))` with `scipy.fft.fftshift(scipy.fft.fft(...))` in `_fft_frame()`. Also replace `np.fft.fft` in `_process_raw()`. Zero other code changes required.
+
+### IQ Recording
+
+| Technology | Version | Purpose | Confidence |
+|------------|---------|---------|------------|
+| **SigMF (sigmf)** | 1.7.2 | IQ recording format + metadata | HIGH |
+
+`pip install sigmf` — depends only on numpy and jsonschema. LGPL v3. Python 3.7–3.14 compatible. The canonical Python implementation from the spec authors (github.com/sigmf/sigmf-python).
+
+**Usage pattern for this project:**
+
+- Native HackRF int8 samples map to SigMF datatype `ci8` — zero conversion overhead
+- Write data file incrementally (append raw bytes from IQ queue)
+- Write metadata file once at recording stop — avoid per-chunk JSON overhead
+- Pre-allocate data file with `os.posix_fallocate()` to prevent filesystem metadata thrashing on slower storage
+- Add `captures` entry per frequency hop (sweep recording) using `sample_start` offset
+- Metadata must include: center_freq, sample_rate, gains, robot pose from /tf, trigger reason, ROS timestamp
+- Detect dropped chunks via sequence number gap; emit new captures entry at gap
+
+Do NOT write to CF32 (float32 complex) unless downstream tooling requires it. CI8 is lossless from the ADC and halves storage. IQEngine and GNU Radio both read CI8 SigMF.
+
+**Throughput reality check:** 20 MSPS × 2 bytes = 40 MB/s. Jetson Orin NVMe handles this with headroom. Jetson Nano SD card (80 MB/s max) is at the limit — use zstd level 1 compression (~1.5:1 on IQ at negligible CPU cost) if targeting Nano.
+
+### CFAR Detection
+
+| Technology | Version | Purpose | Confidence |
+|------------|---------|---------|------------|
+| **Custom CA-CFAR (numpy)** | — | Energy detection on PSD array | HIGH |
+| scipy.ndimage.uniform_filter | >=1.11 | Sliding-window noise estimate | HIGH |
+
+**No external CFAR library is recommended.** Available open-source options (pyCFAR-lib, OpenRadar's mmwave DSP module, tsaith/radar) are all radar-centric (2D range-Doppler maps), not 1D spectrum. The CA-CFAR on a 1D PSD array is ~50 lines of numpy — implementing it directly is less complexity than adding any of these dependencies.
+
+The algorithm for this project:
+
 ```python
-import sigmf
-from sigmf import SigMFFile
-
-meta = SigMFFile(
-    global_info={
-        SigMFFile.SAMPLE_RATE_KEY: 10_000_000,     # 10 MSPS
-        SigMFFile.HW_KEY: "HackRF One + PortaPack",
-        SigMFFile.DATATYPE_KEY: "cf32_le",          # complex float32 little-endian
-    },
-    data_file="recording.sigmf-data"
-)
-meta.add_capture(0, metadata={SigMFFile.FREQUENCY_KEY: 433_920_000})
-meta.tofile("recording.sigmf-meta")
-# IQ samples written separately: np.array(iq, dtype=np.complex64).tofile("recording.sigmf-data")
+# Pseudocode — see docs/rf-ew-review.md for context
+def ca_cfar_1d(psd_db, guard=4, train=16, pfa=1e-4):
+    # Convert to linear for noise estimation
+    psd_lin = 10 ** (psd_db / 10)
+    noise = sliding_window_mean(psd_lin, guard, train)  # scipy.ndimage.uniform_filter1d
+    alpha = threshold_factor(pfa, train)               # from O'Donoughue Ch 2
+    threshold = alpha * noise
+    detections = psd_lin > threshold
+    return group_adjacent_bins(detections, psd_db, noise)
 ```
 
----
+The threshold factor alpha is derived from the Pfa target and the number of training cells using the chi-squared inverse CDF (`scipy.stats.chi2.ppf`). This is the CA-CFAR from O'Donoughue Ch. 2 — not a radar-specific adaptation.
 
-### Spectral Analysis — FFT / Waterfall
+`scipy.ndimage.uniform_filter1d` gives the sliding window mean with proper edge handling and is vectorized on ARM NEON. Faster than a Python loop or np.convolve for this use case.
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| scipy | `>=1.11,<2.0` | `scipy.signal.welch`, `scipy.signal.spectrogram`, windowing functions | Provides higher-quality FFT routines than numpy.fft alone (Welch PSD, configurable windowing, spectrogram stacking). numpy.fft works for single-shot FFT but scipy.signal.spectrogram gives the time-frequency 2D array needed for waterfall data. v1.17.1 is current (Feb 2026) but requires Python >=3.11 — see compatibility note. |
+### ROS2 Message Transport (Large Arrays)
 
-**Compatibility note:** scipy 1.17.x requires Python >=3.11 and numpy >=1.26.4. ROS2 Humble ships Python 3.10. This is a constraint.
+| Technology | Status | Notes | Confidence |
+|------------|--------|-------|------------|
+| Standard DDS (CycloneDDS) | Use for now | Adequate at 10 Hz PSD publish | HIGH |
+| CycloneDDS + iceoryx (shared memory) | **Cannot use** for PSD/IQ messages | Variable-length float arrays disqualify zero-copy | HIGH |
+| Fixed-size custom messages | Required for zero-copy if needed later | Must define fixed array size at compile time | MEDIUM |
 
-**Resolution:** Use `scipy>=1.11,<1.16` (1.15.x is the last series supporting Python 3.10) OR use `numpy.fft` directly with manual windowing. Given that the Docker container can control its Python environment independently of the ROS2 system Python, and hackrf_driver runs without rclpy, installing scipy 1.15.x in the driver venv is safe.
+**Zero-copy shared memory constraint:** CycloneDDS with iceoryx achieves true zero-copy only for fixed-size message types. A `float32[]` (variable-length array) requires serialization even in shared memory mode — the latency gain shrinks to near zero and the complexity cost is real. This means `SpectrumStamped.msg` with `float32[] psd_db` cannot use zero-copy.
 
-**Fallback (no scipy):** numpy.fft is stdlib-compatible and sufficient for single-shot PSD:
+**Practical impact at current scale:** At 10 Hz with 4096 bins × 4 bytes = 16 KB per PSD message, standard CycloneDDS serialization adds ~0.1–0.5 ms latency. This is acceptable for the monitoring use case. Zero-copy optimization is premature.
+
+**If zero-copy becomes necessary (Phase 3+ with high-rate data):** Define a fixed-size variant — e.g., `float32[4096] psd_db` in the `.msg` file. This is a breaking API change, so the decision should be deferred and explicit.
+
+**For IQ recording (40 MB/s):** Do not route IQ over DDS topics. The recorder node must consume from the same bounded queue as the FFT processor (per the dedicated-thread-per-sink pattern documented in `sdr-iq-pipeline-threading.md`). IQ data stays in-process.
+
+### ROS2 Action Servers (Long-Running Operations)
+
+| Technology | Purpose | Confidence |
+|------------|---------|------------|
+| rclpy ActionServer | sweep_band, record_iq, track_signal | HIGH |
+| MultiThreadedExecutor | Run action execute callback in parallel with timer callbacks | HIGH |
+| ReentrantCallbackGroup | Allow action server to execute while PSD timer runs | HIGH |
+
+**Pattern for all long-running action servers:**
+
 ```python
-# numpy-only waterfall bin
-fft_out = np.fft.fftshift(np.fft.fft(samples * np.hanning(len(samples))))
-psd_db = 20 * np.log10(np.abs(fft_out) + 1e-12)
-```
-For the initial implementation, use numpy.fft with a Hann window. Add scipy only if Welch averaging or scipy.signal.spectrogram is specifically required.
+from rclpy.action import ActionServer
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 
-**Recommendation:** Start with numpy.fft + manual windowing in hackrf_driver. Add `scipy>=1.11,<1.16` as an optional extra (`pip install hackrf_driver[spectral]`) to avoid forcing a numpy version pin on consumers.
-
-**Confidence: HIGH** — scipy version matrix confirmed from scipy.org/news and pypi.org/project/scipy/.
-
-**Why NOT matplotlib for headless spectrum:** matplotlib is for display — it has no business in hackrf_driver which is a headless data producer. Spectrum data goes to Redis as a JSON-encoded array; visualization is a consumer concern.
-
----
-
-### pymayhem Async API — asyncio Serial
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| pyserial-asyncio-fast | `>=0.16` | asyncio Transport/Protocol/StreamReader over pyserial | Drop-in asyncio layer for pyserial. v0.16 released 2025-03-27, requires Python >=3.9 (satisfied). Implements "eager writes" that reduce overhead vs the original pyserial-asyncio. Maintained by Home Assistant core team — high confidence in ongoing support. Provides `open_serial_connection()` returning asyncio.StreamReader/StreamWriter — the exact interface needed for an async pymayhem API. |
-
-**Confidence: HIGH** — Version verified from PyPI (pypi.org/project/pyserial-asyncio-fast/).
-
-**Why pyserial-asyncio-fast over pyserial-asyncio:** pyserial-asyncio (v0.6, last release 2022) is unmaintained. pyserial-asyncio-fast is the actively maintained fork used in Home Assistant (a large production codebase). Eager-write optimization matters for low-latency command dispatch.
-
-**Why NOT aioserial:** aioserial (PyPI) wraps pyserial with threading under the hood rather than native asyncio Transport. pyserial-asyncio-fast uses a proper asyncio selector-based Transport.
-
-**Why NOT trio or anyio:** pymayhem has no dependency on a specific async framework. asyncio is stdlib, zero new deps for consumers who use asyncio. Trio/anyio would add mandatory transitive deps.
-
-**Integration pattern for pymayhem:**
-```python
-# pymayhem/mayhem_async.py
-import asyncio
-import serial_asyncio_fast  # package name differs from install name
-
-class AsyncMayhemSerial:
-    async def connect(self, port: str, baudrate: int = 115200):
-        self._reader, self._writer = await serial_asyncio_fast.open_serial_connection(
-            url=port, baudrate=baudrate
+class HackRFLifecycleNode(LifecycleNode):
+    def on_configure(self, state):
+        action_group = ReentrantCallbackGroup()
+        self._sweep_action = ActionServer(
+            self,
+            SurveyBand,
+            '/hackrf/survey_band',
+            self._execute_sweep,
+            callback_group=action_group,
         )
 
-    async def send_command(self, cmd: str) -> str:
-        self._writer.write((cmd + "\r\n").encode())
-        line = await asyncio.wait_for(self._reader.readline(), timeout=2.0)
-        return line.decode().strip()
+    async def _execute_sweep(self, goal_handle):
+        for hop in hops:
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                return SurveyBand.Result()
+            # ... do hop ...
+            feedback = SurveyBand.Feedback(hops_completed=i, total_hops=n)
+            goal_handle.publish_feedback(feedback)
+        goal_handle.succeed()
+        return result
 ```
 
-**pymayhem setup.cfg addition:**
-```ini
-[options.extras_require]
-async =
-    pyserial-asyncio-fast>=0.16
+The executor must be `MultiThreadedExecutor` (not the default `SingleThreadedExecutor`) so the action execute callback runs on its own thread while PSD timer callbacks continue. The existing `main()` in `hackrf_lifecycle_node.py` uses `rclpy.spin()` which defaults to `SingleThreadedExecutor` — this must change before adding any action server.
+
+**Known issue (ros2/ros2 #1609):** Action server does not receive second goal after first terminates under SingleThreadedExecutor. This confirms the executor upgrade is required.
+
+**Async vs threaded callbacks:** rclpy action servers support both. For this project, use the threaded (non-async) pattern. The execute callback blocks intentionally during IQ acquisition. Async callbacks add complexity with no benefit when the hot path is hardware I/O.
+
+### Nav2 / Costmap Integration
+
+| Technology | Approach | Confidence |
+|------------|---------|------------|
+| nav_msgs/OccupancyGrid | Publish RF heatmap as standard occupancy grid | HIGH |
+| Static subscriber in Nav2 | Costmap subscribes to /hackrf/rf_occupancy | MEDIUM |
+| C++ costmap layer plugin | Custom layer that reads /hackrf/detections | MEDIUM |
+
+**Recommended approach for Phase 2:** Publish `nav_msgs/OccupancyGrid` on `/hackrf/rf_occupancy`. Nav2's existing `static_layer` or a custom `range_sensor_layer`-style subscriber can consume this. The RF node publishes; Nav2 subscribes. No custom C++ plugin required for Phase 2.
+
+**OccupancyGrid encoding for RF power:** Map dBm range to [0, 100] occupancy values. Example: noise floor (-120 dBm) → 0, strong signal (-40 dBm) → 100. Grid frame = `map`, cell size = configurable (e.g., 1 m²).
+
+**If a custom costmap layer is required (Phase 3+):** Nav2 costmap layers require C++ via pluginlib (`PLUGINLIB_EXPORT_CLASS`). Python costmap layers are not supported for real-time `updateCosts()` calls — the cost update loop is too hot for Python overhead. The layer would subscribe to `/hackrf/detections` (RFDetectionArray) and mark cells based on estimated emitter position. This requires a separate C++ package.
+
+**Practical approach:** Start with OccupancyGrid publish. Validate that Nav2 can use the grid for avoidance. Only write a C++ costmap layer if robot autonomy requires finer control over cost values or update semantics.
+
+### Threading Architecture (IQ Pipeline)
+
+Per `sdr-iq-pipeline-threading.md` — the mandatory pattern for this codebase:
+
+```
+pyhackrf2 USB callback (hot path — μs budget)
+                  │
+                  ▼
+    ┌─────────────┬───────────────┐
+    │  fft_q      │  recorder_q  │   (each maxsize=64)
+    └──────┬──────┴──────┬───────┘
+           ▼             ▼
+       PSD processor   SigMF recorder
+       (existing)      daemon thread
 ```
 
-Keeping async as an optional extra means the base pymayhem package stays pyserial-only (no asyncio transport dep for users who only need synchronous operation).
+- PSD processor: existing timer callback, drains `fft_q` (currently called `_iq_queue`)
+- SigMF recorder: new daemon thread, drains `recorder_q` when recording active
+- RX callback: `put_nowait()` to all active queues — no other work
+- Watchdog: reads `_last_rx_time` float (atomic under CPython GIL) — no locks
 
----
+The current implementation has a single `_iq_queue`. Adding the recorder requires splitting into a fan-out: either two queues from the rx callback, or a dispatcher thread. The simpler approach is two separate `put_nowait()` calls in `_rx_callback` — one per queue. Drop-oldest semantics preserved on each independently.
 
-### Observability Metrics
+### Supporting Libraries
 
-**Decision: No new package needed.**
-
-Publish metrics directly to Redis using existing redis-py. A dedicated metrics library (prometheus_client, statsd, etc.) would require a separate scrape endpoint, Prometheus infrastructure, or a statsd server — none of which are in the deployment target.
-
-**Pattern:** Write counters/gauges to a Redis hash on a 1-second timer:
-```
-HSET hackrf:metrics iq_frames_total 12345 tx_count 3 rx_errors 0 watchdog_restarts 1
-```
-
-External consumers (Grafana via redis-datasource, custom dashboards) can read this hash. A `hackrf:metrics` keyspace notification can trigger alerting.
-
-**Why NOT prometheus_client:** Adds a background HTTP server thread, scrape port, and requires a Prometheus instance in the deployment. Overkill for a single-device driver.
-
-**Why NOT statsd:** Requires a statsd server. Same problem.
-
-**Confidence: HIGH** — Redis HSET is already used for `hackrf:state`; metrics follow the same pattern at no additional dependency cost.
-
----
-
-### Error Handling Hardening — Custom Exceptions
-
-**Decision: No new package needed.**
-
-Custom exception hierarchies are pure Python stdlib. A well-structured exception module is sufficient:
-
-```python
-# hackrf_driver/exceptions.py
-class HackRFError(Exception):          # base
-    pass
-
-class HackRFDeviceError(HackRFError):  # hardware-level
-    pass
-
-class HackRFConfigError(HackRFError):  # parameter validation
-    pass
-
-class HackRFTXAuthError(HackRFError):  # TX authorization denied
-    pass
-
-class HackRFWatchdogError(HackRFError): # watchdog timeout
-    pass
-```
-
-**For pymayhem:**
-```python
-# pymayhem/exceptions.py
-class MayhemError(Exception):
-    pass
-
-class MayhemTimeoutError(MayhemError):
-    pass
-
-class MayhemCommandError(MayhemError):
-    pass
-```
-
-**Why NOT pydantic for input validation:** pydantic (v2, ~1.5 MB wheel) is well-suited for API boundaries but is heavy for a hardware driver that validates 6 numeric parameters. Use Python's built-in type checking + `ValueError` raises with `@dataclass` for structured config. This keeps pymayhem's dependency list clean (pyserial only).
-
-**Why NOT cerberus / voluptuous:** Same argument — external validation libraries for internal numeric range checks add unnecessary weight.
-
----
-
-### Device Watchdog — IQ Sequence Numbers
-
-**Decision: No new package needed.**
-
-The watchdog is a daemon threading.Thread that checks a `last_rx_timestamp` float, restarting the USB stream if it goes stale beyond a configurable timeout. IQ sequence numbers are integer counters incremented in the RX callback and published in the Redis stream entry alongside the IQ samples.
-
-```python
-# Sequence number in XADD payload
-r.xadd("hackrf:iq:stream", {"seq": str(self._seq), "samples": iq_bytes})
-self._seq += 1  # gaps detectable by consumers
-```
-
-No external package needed. `threading.Thread`, `time.monotonic()`, and `threading.Event` from stdlib handle the watchdog loop.
-
----
-
-### Dead-Letter Queue and TX Dry-Run
-
-**Decision: No new package needed.**
-
-Dead-letter queue uses existing redis-py: failed command entries are XADD'd to `hackrf:cmd:dlq` with error context. TX dry-run validation is a pure Python pre-flight function that validates parameters against the allowlist before touching hardware.
-
----
-
-### ROS2 Spectrum Topic
-
-| Decision | Rationale |
-|----------|-----------|
-| Use `std_msgs/Float32MultiArray` for `/hackrf/spectrum` initially | No standard `sensor_msgs/Spectrum` type exists in ROS2 Humble. Creating a custom message package adds build-system overhead. Float32MultiArray with layout metadata (center_freq, bin_width, nfft in the header) is consistent with the existing `/hackrf/iq` pattern and can be promoted to a custom message in a future milestone without breaking the Redis-side pipeline. |
-
-**Note:** The ROS2 docs and community recommend custom message types for semantic clarity, but the tradeoff at this stage — avoiding a new `hackrf_msgs` package with CMakeLists, package.xml, build infrastructure — favors reusing Float32MultiArray. Revisit if downstream consumers need strongly typed spectrum messages.
-
----
-
-## Full v2.0 Dependency Delta
-
-### hackrf_driver/setup.cfg additions
-
-```ini
-[options]
-install_requires =
-    pymayhem
-    redis>=7.4.0
-    hiredis>=3.3.1
-    PyYAML>=5.4
-    numpy
-    sigmf>=1.7.2          # NEW: IQ recording
-
-[options.extras_require]
-hardware =
-    pyhackrf2
-spectral =
-    scipy>=1.11,<1.16     # NEW: Welch PSD / spectrogram (Python 3.10 compatible)
-test =
-    pytest
-```
-
-### pymayhem/setup.cfg additions
-
-```ini
-[options.extras_require]
-async =
-    pyserial-asyncio-fast>=0.16   # NEW: asyncio serial transport
-test =
-    pytest
-```
-
-### hackrf_ros/setup.py (no changes needed)
-
-BridgeNode has no new hardware dependencies — it reads from Redis only.
-
----
-
-## Installation
-
-```bash
-# Core driver with IQ recording
-pip install "sigmf>=1.7.2"
-
-# Optional: spectral analysis (Welch PSD, spectrogram)
-pip install "scipy>=1.11,<1.16"
-
-# Optional: async pymayhem
-pip install "pyserial-asyncio-fast>=0.16"
-```
-
-```dockerfile
-# In Dockerfile, add to existing pip install block:
-RUN pip3 install "sigmf>=1.7.2" "pyserial-asyncio-fast>=0.16"
-# scipy is optional — add only if spectral features are enabled
-# RUN pip3 install "scipy>=1.11,<1.16"
-```
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| tf2_ros | bundled ROS2 | TF frame broadcast (antenna→base_link) | Phase 1 — stamped messages |
+| geometry_msgs | bundled ROS2 | Pose in SigMF metadata | Phase 2 — IQ recording |
+| nav_msgs | bundled ROS2 | OccupancyGrid for RF heatmap | Phase 2 — occupancy grid |
+| diagnostic_updater | bundled ROS2 | /diagnostics topic — already in use | Existing |
+| scipy.stats | >=1.11 | chi2.ppf for CFAR alpha calculation | Phase 1 — CFAR detector |
+| scipy.ndimage | >=1.11 | uniform_filter1d for sliding noise estimate | Phase 1 — CFAR detector |
 
 ---
 
@@ -288,55 +203,62 @@ RUN pip3 install "sigmf>=1.7.2" "pyserial-asyncio-fast>=0.16"
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| IQ file format | sigmf 1.7.2 | Raw numpy .tofile() | Loses all metadata; no interoperability with SDR tools |
-| IQ file format | sigmf 1.7.2 | CDIF/BLUE | Niche format; no Python first-class support |
-| FFT/spectral | numpy.fft (base), scipy optional | matplotlib.mlab.psd | Requires display backend; matplotlib is for visualization not headless computation |
-| FFT/spectral | numpy.fft (base), scipy optional | pyfftw | FFTW C binding adds compile-time dependency; numpy.fft sufficient for 10 MSPS |
-| Async serial | pyserial-asyncio-fast 0.16 | pyserial-asyncio 0.6 | Unmaintained since 2022; no eager-write optimization |
-| Async serial | pyserial-asyncio-fast 0.16 | aioserial | Uses threading under asyncio hood, not native Transport |
-| Metrics | Redis HSET pattern | prometheus_client | Requires Prometheus infrastructure; no scrape target in deployment |
-| Input validation | stdlib ValueError + dataclass | pydantic v2 | 1.5 MB wheel overkill for 6 numeric hardware parameters |
-| Custom exceptions | stdlib Exception hierarchy | tenacity (retry) | Retry logic is device-specific; tenacity adds dep for what is 10 lines of code |
+| FFT library | scipy.fft | np.fft | np.fft uses FFTPACK, no SIMD on ARM |
+| FFT library | scipy.fft | pyfftw | pyfftw requires libfftw3 build dep + wisdom; marginal gain over scipy.fft for single-size 4096-pt transforms; gate behind flag |
+| FFT library | scipy.fft | CuPy/cuFFT | GPU launch overhead dominates for single small FFTs; mixed results on Jetson Orin; defer to Phase 3 |
+| IQ format | SigMF (sigmf) | Raw .cf32 / .iq | No metadata → unrecoverable six months later |
+| IQ format | SigMF (sigmf) | HDF5 | Heavier dependency, no SDR tool ecosystem |
+| CFAR | Custom numpy | pyCFAR-lib | Radar-centric (2D), not 1D spectrum; more dep complexity than value |
+| CFAR | Custom numpy | OpenRadar | mmWave radar DSP module, not SDR-spectrum applicable |
+| Costmap | OccupancyGrid publish | C++ costmap layer plugin | Plugin requires C++ package; OccupancyGrid covers Phase 2 needs |
+| Transport | Standard DDS | iceoryx zero-copy | Variable-length float arrays disqualify zero-copy; premature optimization |
+| Executor | MultiThreadedExecutor | SingleThreadedExecutor | Single-threaded blocks PSD timer during sweep action; known ros2 bug #1609 |
 
 ---
 
-## What NOT to Use
+## Installation Changes Required
 
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| scipy >=1.16 | Requires Python >=3.11; ROS2 Humble uses Python 3.10 | scipy >=1.11,<1.16 or numpy.fft |
-| pyserial-asyncio (original) | Unmaintained since 2022; slower writes | pyserial-asyncio-fast |
-| aioredis | Merged into redis-py v4.2; abandoned standalone | redis-py 7.x async client (already in stack) |
-| pyfftw | FFTW C-library build dep; no ARM64 wheel guarantee | numpy.fft (vectorized, sufficient throughput) |
-| GNURadio Python bindings | 500+ MB install; not in Docker target | Direct pyhackrf2 + numpy.fft |
-| prometheus_client | Requires a separate Prometheus server to be useful | Redis HSET for metrics (hackrf:metrics hash) |
+```bash
+# In Dockerfile — add to existing apt install line:
+libfftw3-dev  # only if pyfftw is adopted (optional, Phase 1+)
+
+# Python deps — add to setup.py install_requires:
+scipy>=1.11.0
+sigmf>=1.7.2
+
+# scipy is the only new hard dependency for Phase 1.
+# sigmf is needed for Phase 2 IQ recording action server.
+```
+
+**scipy install note:** scipy wheels for ARM64 (aarch64) are published on PyPI for Python 3.8–3.12. `pip install scipy` works inside the Docker container without compilation. Verify with `python -c "import scipy; print(scipy.__version__)"` after pip install.
+
+**sigmf install note:** `pip install sigmf` — pure Python + numpy + jsonschema. No native compile. Works immediately on ARM64.
 
 ---
 
-## Version Compatibility
+## Migration Path from Current Stack
 
-| Package | Compatible With | Notes |
-|---------|-----------------|-------|
-| sigmf 1.7.2 | numpy any, Python 3.7–3.14 | No version conflict with existing numpy pin |
-| scipy 1.15.x | numpy >=1.23, Python 3.10–3.13 | Last series supporting Python 3.10 (Humble) |
-| pyserial-asyncio-fast 0.16 | pyserial >=3.5, Python >=3.9 | Compatible with existing pyserial 3.5 pin |
-| sigmf 1.7.2 | jsonschema >=4.0 | jsonschema not currently in stack; no known conflicts |
+| Current | Target | Change Type | Phase |
+|---------|--------|-------------|-------|
+| `np.fft.fft` | `scipy.fft.fft` | Drop-in replace, 1-line per call | Phase 1 |
+| `np.fft.fftshift` | `scipy.fft.fftshift` | Drop-in replace | Phase 1 |
+| `Float32MultiArray` for PSD | `SpectrumStamped.msg` custom msg | New message type + custom interfaces package | Phase 1 |
+| `rclpy.spin()` | `MultiThreadedExecutor` | Executor upgrade in main() | Phase 1 (before first action server) |
+| Sweep service | Sweep action server | New action definition, replace service | Phase 2 |
+| No IQ recording | SigMF recorder daemon thread | New thread + sigmf dep | Phase 2 |
 
 ---
 
 ## Sources
 
-- SigMF PyPI: https://pypi.org/project/SigMF/ (v1.7.2, verified 2026-03-30)
-- sigmf-python GitHub: https://github.com/sigmf/sigmf-python (pyproject.toml deps: numpy, jsonschema)
-- pyserial-asyncio-fast PyPI: https://pypi.org/project/pyserial-asyncio-fast/ (v0.16, 2025-03-27)
-- pyserial-asyncio-fast GitHub: https://github.com/home-assistant-libs/pyserial-asyncio-fast
-- scipy PyPI: https://pypi.org/project/scipy/ (v1.17.1 current; v1.15.x last Python 3.10 series)
-- scipy release notes: https://docs.scipy.org/doc/scipy/release.html
-- numpy PyPI: https://pypi.org/project/numpy/ (v2.4.4, 2026-03-29)
-- PySDR IQ Files guide: https://pysdr.org/content/iq_files.html (SigMF format overview)
-- ROS2 Humble std_msgs: https://docs.ros.org/en/ros2_packages/humble/api/std_msgs/ (Float32MultiArray)
-
----
-
-*Stack research for: HackRF ROS2 Driver v2.0 new signal capabilities, hardening, observability*
-*Researched: 2026-03-30*
+- scipy ARM NEON vectorization: [scipy PR #12779](https://github.com/scipy/scipy/pull/12779)
+- pyFFTW v0.15.1 with ARM64 wheels: [pyFFTW releases](https://github.com/pyFFTW/pyFFTW/releases)
+- CycloneDDS zero-copy constraints: [rmw_cyclonedds shared_memory_support.md](https://github.com/ros2/rmw_cyclonedds/blob/rolling/shared_memory_support.md)
+- CuPy on Jetson Orin ARM64: [NVIDIA developer forums](https://forums.developer.nvidia.com/t/challenges-in-achieving-optimal-gpu-performance-for-fft-on-nvidia-jetson-agx-orin/303418), [CuPy issue #8151](https://github.com/cupy/cupy/issues/8151)
+- SigMF Python library: [sigmf/sigmf-python](https://github.com/sigmf/sigmf-python), [PyPI](https://pypi.org/project/SigMF/)
+- CFAR theory: O'Donoughue, *Emitter Detection and Geolocation for Electronic Warfare* (Artech 2019), Ch. 2 — per vault/concepts/detection-theory-np-and-cfar.md
+- SigMF streaming write pattern: vault/concepts/sigmf-iq-recording.md
+- IQ pipeline threading rules: vault/concepts/sdr-iq-pipeline-threading.md
+- Nav2 costmap plugin (C++ requirement): [Nav2 docs](https://docs.nav2.org/plugin_tutorials/docs/writing_new_costmap2d_plugin.html)
+- Action server MultiThreadedExecutor: [ROS2 Humble executor docs](https://docs.ros.org/en/humble/Concepts/Intermediate/About-Executors.html)
+- Known action server bug: [ros2/ros2 #1609](https://github.com/ros2/ros2/issues/1609)
