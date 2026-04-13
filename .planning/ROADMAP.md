@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Sensor Foundations** - Add stamped messages, TF, CFAR detection + classification, and FFT performance to make the driver a complete RF sensor
 - [ ] **Phase 2: Robot Autonomy Integration** - Action servers for sweep and IQ recording, plus RF occupancy grid for nav stack
-- [ ] **Phase 3: Reliability** - AGC, async parameter retuning, and USB disconnect recovery to harden the runtime
+- [x] **Phase 3: Reliability** - AGC, async parameter retuning, and USB disconnect recovery to harden the runtime (completed 2026-04-13)
 - [ ] **Phase 4: Advanced Signal Intelligence** - Wideband anomaly detection, emitter localization, cyclostationary features, and multi-radio architecture
 
 ## Phase Details
@@ -64,9 +64,9 @@ Plans:
   3. Physically unplugging the HackRF while streaming causes the `/diagnostics` topic to transition to WARN then ERROR state within 2 seconds, without crashing the node
 **Plans**: 3 plans
 Plans:
-- [ ] 03-01-PLAN.md — AGC: _agc_tick() with hysteresis, clip-rate feedback, LNA-first gain reduction, diagnostics reporting
-- [ ] 03-02-PLAN.md — Async param: offload stop_rx/start_rx to _param_worker daemon thread, _param_callback returns immediately
-- [ ] 03-03-PLAN.md — USB disconnect: _handle_usb_fault(), _rx_callback crash-safe, WARN->ERROR escalation in diagnostics
+- [x] 03-01-PLAN.md — AGC: _agc_tick() with hysteresis, clip-rate feedback, LNA-first gain reduction, diagnostics reporting
+- [x] 03-02-PLAN.md — Async param: offload stop_rx/start_rx to _param_worker daemon thread, _param_callback returns immediately
+- [x] 03-03-PLAN.md — USB disconnect: _handle_usb_fault(), _rx_callback crash-safe, WARN->ERROR escalation in diagnostics
 **UI hint**: no
 
 ### Phase 4: Advanced Signal Intelligence
@@ -75,10 +75,15 @@ Plans:
 **Requirements**: ADV-01, ADV-02, ADV-03, HW-01, HW-02
 **Success Criteria** (what must be TRUE):
   1. A new strong signal appearing in a frequency band that was idle in the learned baseline causes an anomaly flag on the detections topic within one update cycle
-  2. After collecting power measurements at three or more distinct robot poses, the emitter localization node publishes a `PoseWithCovarianceStamped` estimate at the RF source's approximate location
+  2. After collecting power measurements at three or more distinct robot poses, the emitter localization node publishes an `RFEmitterMap` message on `/hackrf/emitter_map` containing an `RFEmitterEstimate` entry with estimated_x, estimated_y (map frame), diagonal covariance, and observation_count at the RF source's approximate location (per D-06)
   3. In a 2.4 GHz ISM environment with simultaneous WiFi and BLE transmitters, cyclostationary feature extraction correctly labels each detection with the appropriate modulation class
   4. Two HackRF instances launched under `/hackrf_0/*` and `/hackrf_1/*` namespaces publish independent `SpectrumStamped` streams without topic collision
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 04-01-PLAN.md — Message schema extensions (RFDetection +4 fields, RFEmitterEstimate, RFEmitterMap) + device_index param + multi_radio.launch.py
+- [ ] 04-02-PLAN.md — Anomaly detection in cfar_node: AnomalyDetector class, EMA baseline, dual trigger, diagnostics (ADV-01)
+- [ ] 04-03-PLAN.md — Emitter localization node: Nelder-Mead RSSI fit, collinearity rejection, RFEmitterMap publisher (ADV-02)
+- [ ] 04-04-PLAN.md — Cyclostationary feature node: WiFi/BLE/ZigBee classifier, /hackrf/cyclo_detections publisher (ADV-03)
 **UI hint**: no
 
 ## Progress
@@ -90,5 +95,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Sensor Foundations | 1/4 | In progress | - |
 | 2. Robot Autonomy Integration | 1/4 | In Progress|  |
-| 3. Reliability | 0/3 | Not started | - |
-| 4. Advanced Signal Intelligence | 0/? | Not started | - |
+| 3. Reliability | 3/3 | Complete   | 2026-04-13 |
+| 4. Advanced Signal Intelligence | 0/4 | Not started | - |
