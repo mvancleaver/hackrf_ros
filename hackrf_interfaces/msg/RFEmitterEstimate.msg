@@ -1,0 +1,7 @@
+uint32 detection_id
+float64 estimated_x
+float64 estimated_y
+float64 covariance_xx
+float64 covariance_yy
+uint32 observation_count
+builtin_interfaces/Time last_seen

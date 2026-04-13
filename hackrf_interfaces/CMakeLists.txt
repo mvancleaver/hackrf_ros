@@ -11,6 +11,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RFDetection.msg"
   "msg/RFDetectionArray.msg"
   "msg/RFEnvironment.msg"
+  "msg/RFEmitterEstimate.msg"
+  "msg/RFEmitterMap.msg"
   "srv/Sweep.srv"
   "action/Sweep.action"
   "action/RecordIQ.action"

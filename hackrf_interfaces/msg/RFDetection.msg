@@ -5,3 +5,7 @@ float32 snr_db
 string classification
 uint32 persistence_frames
 uint32 detection_id
+bool is_anomaly
+string anomaly_type
+string cyclo_classification
+float32 cyclo_confidence
