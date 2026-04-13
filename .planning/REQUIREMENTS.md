@@ -38,9 +38,9 @@
 
 ### RF Mapping
 
-- [ ] **MAP-01**: RF occupancy grid published as nav_msgs/OccupancyGrid from detections + robot odometry
-- [ ] **MAP-02**: Occupancy grid integrates signal power observations by spatial cell
-- [ ] **MAP-03**: Grid resolution and update rate configurable via parameters
+- [x] **MAP-01**: RF occupancy grid published as nav_msgs/OccupancyGrid from detections + robot odometry
+- [x] **MAP-02**: Occupancy grid integrates signal power observations by spatial cell
+- [x] **MAP-03**: Grid resolution and update rate configurable via parameters
 
 ### Reliability
 
