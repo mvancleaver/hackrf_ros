@@ -102,6 +102,7 @@ def _make_ros_mocks():
     qos_mod.QoSProfile = MagicMock()
     qos_mod.ReliabilityPolicy = MagicMock()
     qos_mod.HistoryPolicy = MagicMock()
+    qos_mod.DurabilityPolicy = MagicMock()
 
     # rclpy.callback_groups
     cbg_mod = types.ModuleType('rclpy.callback_groups')

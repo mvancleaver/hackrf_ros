@@ -104,6 +104,10 @@ def _install_ros_mocks():
     rcl_if = types.ModuleType('rcl_interfaces')
     rcl_if_msg = types.ModuleType('rcl_interfaces.msg')
     rcl_if_msg.ParameterDescriptor = MagicMock()
+    rcl_if_msg.FloatingPointRange = MagicMock()
+    rcl_if_msg.IntegerRange = MagicMock()
+    rcl_if_msg.SetParametersResult = MagicMock(
+        return_value=MagicMock(successful=True))
 
     # geometry_msgs
     geom_msgs = types.ModuleType('geometry_msgs')
@@ -301,7 +305,7 @@ class TestBuildSigmfMeta(unittest.TestCase):
         with tempfile.NamedTemporaryFile(
                 suffix='.sigmf-meta', mode='w', delete=False) as mf:
             meta_path = mf.name
-        meta.dump(meta_path, tofile=True)
+        meta.tofile(meta_path, skip_validate=True, overwrite=True)
 
         with open(meta_path) as jf:
             doc = json.load(jf)
@@ -339,7 +343,7 @@ class TestBuildSigmfMeta(unittest.TestCase):
         with tempfile.NamedTemporaryFile(
                 suffix='.sigmf-meta', mode='w', delete=False) as mf:
             meta_path = mf.name
-        meta.dump(meta_path, tofile=True)
+        meta.tofile(meta_path, skip_validate=True, overwrite=True)
 
         with open(meta_path) as jf:
             doc = json.load(jf)

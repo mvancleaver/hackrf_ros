@@ -31,6 +31,7 @@ setup(
             'sweep_node = hackrf_ros.sweep_node:main',
             'sweep_display = hackrf_ros.sweep_display:main',
             'cfar_node = hackrf_ros.cfar_node:main',
+            'iq_recorder_node = hackrf_ros.iq_recorder_node:main',
         ],
     },
 )
