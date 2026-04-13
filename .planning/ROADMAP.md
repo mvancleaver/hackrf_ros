@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 4 plans
 Plans:
 - [x] 01-01-PLAN.md — Define 4 custom message types (SpectrumStamped, RFDetection, RFDetectionArray, RFEnvironment) and register in hackrf_interfaces
-- [ ] 01-02-PLAN.md — Upgrade driver: scipy.fft, SpectrumStamped publish, TF broadcaster, BEST_EFFORT QoS, MultiThreadedExecutor
+- [x] 01-02-PLAN.md — Upgrade driver: scipy.fft, SpectrumStamped publish, TF broadcaster, BEST_EFFORT QoS, MultiThreadedExecutor
 - [ ] 01-03-PLAN.md — Create cfar_node.py: CA-CFAR detection, persistence tracking, band classification, RFDetectionArray/RFEnvironment publish
 - [ ] 01-04-PLAN.md — Create sensor_pipeline.launch.py and verify complete pipeline with hardware checkpoint
 **UI hint**: no

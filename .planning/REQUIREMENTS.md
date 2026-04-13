@@ -8,11 +8,11 @@
 ### Messages & Integration
 
 - [x] **MSG-01**: PSD published as SpectrumStamped.msg with header.stamp and frame_id
-- [ ] **MSG-02**: Static TF transform published for configurable antenna frame (base_link -> hackrf_antenna)
+- [x] **MSG-02**: Static TF transform published for configurable antenna frame (base_link -> hackrf_antenna)
 - [x] **MSG-03**: RF detections published as RFDetectionArray.msg with noise floor, per-signal freq/BW/power/SNR/classification/ID
 - [x] **MSG-04**: RF environment summary published at 1 Hz with emitter count, band occupancy, strongest signal
-- [ ] **MSG-05**: All streaming topics use BEST_EFFORT QoS (no back-pressure on pipeline)
-- [ ] **MSG-06**: Executor upgraded to MultiThreadedExecutor with ReentrantCallbackGroup
+- [x] **MSG-05**: All streaming topics use BEST_EFFORT QoS (no back-pressure on pipeline)
+- [x] **MSG-06**: Executor upgraded to MultiThreadedExecutor with ReentrantCallbackGroup
 
 ### Detection & Classification
 
@@ -50,8 +50,8 @@
 
 ### Performance
 
-- [ ] **PERF-01**: FFT uses scipy.fft with ARM NEON SIMD (replace numpy.fft)
-- [ ] **PERF-02**: PSD publishing maintains 10 Hz update rate on Jetson ARM64
+- [x] **PERF-01**: FFT uses scipy.fft with ARM NEON SIMD (replace numpy.fft)
+- [x] **PERF-02**: PSD publishing maintains 10 Hz update rate on Jetson ARM64
 
 ### Advanced Processing
 
