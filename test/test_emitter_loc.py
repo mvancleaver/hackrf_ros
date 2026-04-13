@@ -1,13 +1,72 @@
 """Tests for emitter localization helpers (ADV-02).
 
-RED phase: emitter_loc_node does not exist. All tests fail.
+Tests import pure helper functions from hackrf_ros.emitter_loc_node.
+ROS2 stubs allow running without rclpy installed (matches project pattern
+established in test_rf_map_node.py).
 Run: pytest test/test_emitter_loc.py -v
 """
 from __future__ import annotations
-import numpy as np
-import pytest
+import sys
+import types
 
-from hackrf_ros.emitter_loc_node import _poses_well_spread, _estimate_emitter
+# ---------------------------------------------------------------------------
+# Minimal ROS2 stubs so emitter_loc_node can be imported without rclpy
+# (pattern from test_rf_map_node.py)
+# ---------------------------------------------------------------------------
+
+rclpy_mod = types.ModuleType('rclpy')
+rclpy_mod.init = lambda args=None: None
+rclpy_mod.try_shutdown = lambda: None
+rclpy_time_mod = types.ModuleType('rclpy.time')
+rclpy_time_mod.Time = object
+rclpy_duration_mod = types.ModuleType('rclpy.duration')
+rclpy_duration_mod.Duration = object
+rclpy_node_mod = types.ModuleType('rclpy.node')
+rclpy_node_mod.Node = object
+rclpy_qos_mod = types.ModuleType('rclpy.qos')
+rclpy_qos_mod.QoSProfile = object
+rclpy_qos_mod.ReliabilityPolicy = type(
+    'ReliabilityPolicy', (), {'RELIABLE': 'RELIABLE', 'BEST_EFFORT': 'BEST_EFFORT'})()
+rclpy_qos_mod.HistoryPolicy = type(
+    'HistoryPolicy', (), {'KEEP_LAST': 'KEEP_LAST'})()
+rclpy_cb_mod = types.ModuleType('rclpy.callback_groups')
+rclpy_cb_mod.ReentrantCallbackGroup = object
+rclpy_exec_mod = types.ModuleType('rclpy.executors')
+rclpy_exec_mod.MultiThreadedExecutor = object
+
+sys.modules.setdefault('rclpy', rclpy_mod)
+sys.modules.setdefault('rclpy.time', rclpy_time_mod)
+sys.modules.setdefault('rclpy.duration', rclpy_duration_mod)
+sys.modules.setdefault('rclpy.node', rclpy_node_mod)
+sys.modules.setdefault('rclpy.qos', rclpy_qos_mod)
+sys.modules.setdefault('rclpy.callback_groups', rclpy_cb_mod)
+sys.modules.setdefault('rclpy.executors', rclpy_exec_mod)
+
+# tf2_ros
+tf2_ros_mod = types.ModuleType('tf2_ros')
+tf2_ros_mod.Buffer = object
+tf2_ros_mod.TransformListener = object
+tf2_ros_mod.LookupException = Exception
+tf2_ros_mod.ExtrapolationException = Exception
+sys.modules.setdefault('tf2_ros', tf2_ros_mod)
+
+# hackrf_interfaces
+hi_mod = types.ModuleType('hackrf_interfaces')
+hi_msg_mod = types.ModuleType('hackrf_interfaces.msg')
+hi_msg_mod.RFDetectionArray = object
+hi_msg_mod.RFDetection = object
+hi_msg_mod.RFEmitterMap = object
+hi_msg_mod.RFEmitterEstimate = object
+sys.modules.setdefault('hackrf_interfaces', hi_mod)
+sys.modules.setdefault('hackrf_interfaces.msg', hi_msg_mod)
+
+# ---------------------------------------------------------------------------
+# Now import helpers under test
+# ---------------------------------------------------------------------------
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
+
+from hackrf_ros.emitter_loc_node import _poses_well_spread, _estimate_emitter  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
