@@ -1,221 +1,134 @@
-# Requirements: HackRF ROS2 Driver
+# Requirements: HackRF ROS2 RF Sensor
 
-**Defined:** 2026-03-29
-**Core Value:** Reliable, safe bidirectional SDR control with IQ data streaming to Redis and TX operations gated behind explicit authorization.
+**Defined:** 2026-04-13
+**Core Value:** Reliable, calibrated RF spectrum awareness published as standard ROS2 messages for robot autonomy
 
 ## v1 Requirements
 
-Requirements for initial release. Each maps to roadmap phases.
+### Messages & Integration
 
-### RX Pipeline
+- [ ] **MSG-01**: PSD published as SpectrumStamped.msg with header.stamp and frame_id
+- [ ] **MSG-02**: Static TF transform published for configurable antenna frame (base_link -> hackrf_antenna)
+- [ ] **MSG-03**: RF detections published as RFDetectionArray.msg with noise floor, per-signal freq/BW/power/SNR/classification/ID
+- [ ] **MSG-04**: RF environment summary published at 1 Hz with emitter count, band occupancy, strongest signal
+- [ ] **MSG-05**: All streaming topics use BEST_EFFORT QoS (no back-pressure on pipeline)
+- [ ] **MSG-06**: Executor upgraded to MultiThreadedExecutor with ReentrantCallbackGroup
 
-- [x] **RX-01**: IQ sample buffer uses thread-safe queue (queue.Queue) replacing shared numpy array
-- [x] **RX-02**: USB error recovery with exponential backoff reconnection when device disconnects
-- [x] **RX-03**: Parameter validation enforces hardware ranges (freq: 1 MHz-6 GHz, LNA gain: 0-40 dB, VGA gain: 0-62 dB, sample rate: 2-20 MSPS)
-- [x] **RX-04**: Class renamed from HackRFPuiblisherNode to HackRFNode with structured logging (no bare print statements)
-- [x] **RX-05**: stop_rx() deadlock mitigated with timeout guard during parameter reconfiguration
-- [x] **RX-06**: Clean lifecycle management: startup initializes device, shutdown stops streaming and closes device
-- [x] **RX-07**: RX callback stripped to bare enqueue operation to minimize GIL contention
+### Detection & Classification
 
-### Redis Integration
+- [ ] **DET-01**: CA-CFAR energy detector operates on PSD array with configurable guard cells, reference cells, and Pfa
+- [ ] **DET-02**: Adjacent detected bins grouped into signal detections with centroid frequency, 3 dB bandwidth, and integrated power
+- [ ] **DET-03**: Persistence tracker confirms detections across N consecutive frames before publishing (configurable N)
+- [ ] **DET-04**: Each detection assigned a stable ID that persists across frames via frequency-proximity matching
+- [ ] **DET-05**: Band classification assigns label to each detection based on center frequency + bandwidth lookup table
+- [ ] **DET-06**: Classification covers at minimum: WiFi, Bluetooth/BLE, ZigBee, LTE, ISM narrowband, unknown
 
-- [x] **RED-01**: IQ samples published to Redis Stream via XADD with configurable MAXLEN trimming
-- [x] **RED-02**: Device state published to Redis Hash (hackrf:state) with current frequency, gain, sample rate, streaming status
-- [x] **RED-03**: Command interface via Redis subscriber (hackrf:cmd) accepts frequency, gain, sample rate, and bandwidth changes
-- [x] **RED-04**: Redis I/O runs in dedicated daemon thread, never blocking ROS2 executor callbacks
-- [x] **RED-05**: Redis key schema uses hackrf: namespace prefix consistently
+### Sweep & Survey
 
-### Mayhem Serial Control
-
-- [x] **MAY-01**: Serial port lifecycle: open /dev/ttyACM1 at startup, close at shutdown, reconnect on disconnect
-- [x] **MAY-02**: applist queried at startup to discover available Mayhem apps (no hardcoded names)
-- [x] **MAY-03**: appstart command switches between Mayhem apps by discovered short name
-- [x] **MAY-04**: setfreq command updates frequency within active app (validates app supports it)
-- [x] **MAY-05**: radioinfo query returns current device configuration for verification
-- [x] **MAY-06**: Mode conflict between pyhackrf2 and serial verified empirically at startup with clear error if incompatible
-
-### TX Control
-
-- [x] **TX-01**: TX via pyhackrf2 start_tx() with explicit half-duplex RX-to-TX mode switch
-- [x] **TX-02**: Frequency allowlist blocks transmission on restricted bands (cellular, aviation, emergency)
-- [x] **TX-03**: Configurable flag to disable frequency allowlist for authorized testing environments
-- [x] **TX-04**: Antenna confirmation required before any TX operation (explicit user acknowledgment)
-- [x] **TX-05**: One-token-per-TX authorization via Redis GETDEL (no persistent armed state)
-- [x] **TX-06**: TX automatically stopped on node shutdown (stop_tx() in destroy_node)
-- [x] **TX-07**: TX commands routed through Redis command interface with authorization field required
-
-### Refactor
-
-- [x] **REF-01**: `pymayhem` is a standalone pip-installable Python package with no ROS2 or Redis dependencies
-- [x] **REF-02**: `pymayhem` exposes all 47 Mayhem serial commands organized by domain (radio, ui, filesystem, sensors, system)
-- [x] **REF-03**: `pymayhem` handles `appstart` USB reset with automatic reconnection
-- [x] **REF-04**: HackRF core driver runs standalone with Redis as only external interface (no rclpy import)
-- [x] **REF-05**: ROS2 bridge node reads IQ from `hackrf:iq:stream` and publishes to `/hackrf/iq` topic
-- [x] **REF-06**: ROS2 bridge node subscribes to `hackrf:state` and publishes device state to ROS2 topics
-- [x] **REF-07**: All 68 existing unit tests pass after refactor (no regression)
-
-## v2 Requirements
-
-Requirements for v2.0: Hardening, Observability & Signal Capabilities.
-
-### Error Handling & Validation
-
-- [x] **ERR-01**: pymayhem raises typed exceptions (MayhemError hierarchy) instead of returning bool on command failures
-- [x] **ERR-02**: hackrf_driver raises typed exceptions (HackRFError hierarchy) for config, device, and TX errors
-- [x] **ERR-03**: All public pymayhem methods validate input parameters and raise ValueError on out-of-range values
-- [x] **ERR-04**: All hackrf_driver config changes validate against PARAM_RANGES before touching hardware
-- [x] **ERR-05**: Exception dispatch boundary in redis_bridge catches pymayhem/hackrf exceptions and maps to structured Redis error state
-
-### Reliability
-
-- [ ] **REL-01**: Device health watchdog detects USB stall (no RX data for 10s) and triggers automatic reconnect without deadlocking _device_lock
-- [x] **REL-02**: BridgeNode survives Redis restart — exponential backoff retry loop with automatic resubscribe to Pub/Sub channels
-- [x] **REL-03**: Every IQ XADD entry includes a monotonic sequence number; consumers can detect dropped buffers
-
-### Observability
-
-- [ ] **OBS-01**: hackrf:metrics Redis hash publishes IQ throughput (chunks/sec), error counts, queue depths, and uptime at 1 Hz
-- [ ] **OBS-02**: Failed Redis commands archived to hackrf:cmd:dlq stream (MAXLEN=500) with error context and timestamp
-- [ ] **OBS-03**: BridgeNode publishes /hackrf/metrics ROS2 topic with same data as hackrf:metrics hash
-
-### TX Safety
-
-- [x] **TXS-01**: validate_tx() checks all four TX guards (antenna, hard-block, freq filter, auth existence) without consuming the auth token
-- [x] **TXS-02**: BridgeNode exposes /hackrf/confirm_antenna ROS2 service that sets the Redis antenna confirmation key
-- [x] **TXS-03**: TXController periodically re-reads antenna confirmation key (not just at init)
+- [ ] **SWP-01**: Sweep implemented as ROS2 action server with per-hop progress feedback
+- [ ] **SWP-02**: Sweep action supports cancel (abort mid-sweep, restore original frequency)
+- [ ] **SWP-03**: Sweep returns stitched composite PSD with Tukey-blended hop boundaries in linear domain
 
 ### IQ Recording
 
-- [ ] **REC-01**: Redis record_start command begins recording IQ to a SigMF file (.sigmf-data + .sigmf-meta) in a configurable directory
-- [ ] **REC-02**: Redis record_stop command stops recording and finalizes SigMF metadata (datatype, sample_rate, frequency, datetime)
-- [ ] **REC-03**: Recording runs in a dedicated thread with its own bounded queue — does not block the IQ pipeline
-- [ ] **REC-04**: Sequence number gaps during recording are noted as new SigMF capture entries with correct sample_start offset
+- [ ] **REC-01**: IQ recording implemented as ROS2 action server with start/stop and progress feedback
+- [ ] **REC-02**: IQ written in SigMF format (ci8 datatype, JSON metadata sidecar)
+- [ ] **REC-03**: Recording metadata includes robot pose from TF at capture start, all SDR parameters, trigger reason
+- [ ] **REC-04**: Recorder uses dedicated write thread with bounded queue (no IQ drops from disk stalls)
 
-### Spectral Analysis
+### RF Mapping
 
-- [ ] **FFT-01**: Headless FFT/PSD computed in a dedicated thread at configurable rate (default 10 Hz, max 50 Hz)
-- [ ] **FFT-02**: Power spectrum published to hackrf:spectrum Redis stream with float32 PSD bins
-- [ ] **FFT-03**: /hackrf/spectrum ROS2 topic published by BridgeNode via Pub/Sub subscription (mirrors IQ topic pattern)
-- [ ] **FFT-04**: Waterfall history maintained in hackrf:waterfall Redis list (rolling 200-row window via LPUSH + LTRIM)
+- [ ] **MAP-01**: RF occupancy grid published as nav_msgs/OccupancyGrid from detections + robot odometry
+- [ ] **MAP-02**: Occupancy grid integrates signal power observations by spatial cell
+- [ ] **MAP-03**: Grid resolution and update rate configurable via parameters
 
-### Frequency Hopping
+### Reliability
 
-- [ ] **HOP-01**: Redis hop_start command accepts a frequency list and dwell time (minimum 100ms) and begins programmable scanning
-- [ ] **HOP-02**: Redis hop_stop command halts the hop sequence and holds current frequency
-- [ ] **HOP-03**: Hop scheduler checks _is_transmitting before each hop — backs off without advancing if TX is active
-- [ ] **HOP-04**: Current hop state (active, current_freq, dwell_ms, hop_index) reflected in hackrf:state hash
+- [ ] **REL-01**: Automatic gain control adjusts LNA/VGA based on ADC clip rate feedback
+- [ ] **REL-02**: Parameter callback retune offloaded to background thread (no executor blocking)
+- [ ] **REL-03**: USB disconnect detected and reported via diagnostics (WARN/ERROR state)
 
-### Legacy Cleanup
+### Performance
 
-- [x] **LEG-01**: HackRFNode marked deprecated with docstring and log warning pointing users to hackrf_driver + BridgeNode
+- [ ] **PERF-01**: FFT uses scipy.fft with ARM NEON SIMD (replace numpy.fft)
+- [ ] **PERF-02**: PSD publishing maintains 10 Hz update rate on Jetson ARM64
 
-## v3 Requirements
+### Advanced Processing
 
-Deferred to future release. Tracked but not in current roadmap.
+- [ ] **ADV-01**: Wideband anomaly detection flags deviations from learned baseline PSD per frequency
+- [ ] **ADV-02**: Multi-observation emitter localization estimates emitter position from power measurements at multiple robot poses
+- [ ] **ADV-03**: Cyclostationary feature extraction disambiguates WiFi vs BLE vs ZigBee in 2.4 GHz ISM band
 
-### Advanced Mayhem
+### Hardware Expansion
 
-- **MAY-10**: POCSAG TX via sendpocsag serial command
-- **MAY-11**: Mayhem file replay (SD card staging + appstart Replay)
-- **MAY-12**: gotgps serial injection for mobile/APRS use cases
+- [ ] **HW-01**: KrakenSDR direction finding integration publishes AOA estimates as PoseWithCovarianceStamped
+- [ ] **HW-02**: Multi-radio architecture supports namespace-separated instances (/hackrf_0/*, /hackrf_1/*)
 
-### Architecture
+## v2 Requirements
 
-- **ARCH-01**: ROS2 Lifecycle Node migration for managed state transitions
-- **ARCH-02**: Redis consumer group support for multiple downstream consumers
-- **ARCH-03**: Graceful degradation: continue on ROS2 topics if Redis unreachable
+### Advanced Classification
+- **CLS-01**: ML-based automatic modulation classification for fine-grained signal identification
+- **CLS-02**: Protocol-level demodulation for WiFi/BLE beacon parsing
 
-### Async API
-
-- **ASYNC-01**: pymayhem async API (AsyncMayhemClient) with asyncio serial transport
-- **ASYNC-02**: Event loop ownership contract for ROS2/asyncio coexistence
+### Multi-Platform
+- **PLT-01**: ARM32 support (Raspberry Pi 4)
+- **PLT-02**: x86_64 desktop development without Docker
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Web UI / dashboard | Redis consumers can build their own visualization |
-| Signal processing / demodulation | Out of scope for driver layer |
-| Multi-device support | Single HackRF One target |
-| Custom Mayhem firmware mods | Work with existing Mayhem serial protocol |
-| Persistent always-on recording | 160 MB/s fills disk in minutes; trigger-based only |
-| Automatic demodulation | Belongs in consumer layer, not driver |
-| Frequency hopping during active TX | Half-duplex hardware constraint |
-| asyncio port of hackrf_driver core | libusb callbacks are not async-safe |
-| OAuth / web auth for TX | Redis GETDEL token is sufficient for single-user driver |
+| TX transmission | Safety concern, removed during rescope |
+| Protocol demodulation | High complexity, low ROI for robot autonomy |
+| ML-based AMC | Heuristics sufficient for coarse classification; ML adds training/inference cost |
+| DSSS/FHSS signal tracking | 43 dB processing gain loss makes energy detection ineffective |
+| Redis IQ streaming | Replaced by ROS2 topics and SigMF recording |
+| GUI applications in core | Display nodes are optional downstream subscribers |
+| Real-time signal decode | Not needed for spectrum awareness use case |
+| Mayhem firmware control | Separate package concern (pymayhem) |
 
 ## Traceability
 
-Which phases cover which requirements. Updated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| RX-01 | Phase 1 | Complete |
-| RX-02 | Phase 1 | Complete |
-| RX-03 | Phase 1 | Complete |
-| RX-04 | Phase 1 | Complete |
-| RX-05 | Phase 1 | Complete |
-| RX-06 | Phase 1 | Complete |
-| RX-07 | Phase 1 | Complete |
-| MAY-01 | Phase 2 | Complete |
-| MAY-02 | Phase 2 | Complete |
-| MAY-03 | Phase 2 | Complete |
-| MAY-04 | Phase 2 | Complete |
-| MAY-05 | Phase 2 | Complete |
-| MAY-06 | Phase 2 | Complete |
-| RED-01 | Phase 3 | Complete |
-| RED-02 | Phase 3 | Complete |
-| RED-03 | Phase 3 | Complete |
-| RED-04 | Phase 3 | Complete |
-| RED-05 | Phase 3 | Complete |
-| TX-01 | Phase 4 | Complete |
-| TX-02 | Phase 4 | Complete |
-| TX-03 | Phase 4 | Complete |
-| TX-04 | Phase 4 | Complete |
-| TX-05 | Phase 4 | Complete |
-| TX-06 | Phase 4 | Complete |
-| TX-07 | Phase 4 | Complete |
-| REF-01 | Phase 5 | Complete |
-| REF-02 | Phase 5 | Complete |
-| REF-03 | Phase 5 | Complete |
-| REF-04 | Phase 5 | Complete |
-| REF-05 | Phase 5 | Complete |
-| REF-06 | Phase 5 | Complete |
-| REF-07 | Phase 5 | Complete |
-| ERR-01 | Phase 6 | Complete |
-| ERR-02 | Phase 6 | Complete |
-| ERR-03 | Phase 6 | Complete |
-| ERR-04 | Phase 6 | Complete |
-| ERR-05 | Phase 6 | Complete |
-| REL-02 | Phase 6 | Complete |
-| REL-03 | Phase 6 | Complete |
-| TXS-01 | Phase 6 | Complete |
-| TXS-02 | Phase 6 | Complete |
-| TXS-03 | Phase 6 | Complete |
-| LEG-01 | Phase 6 | Complete |
-| REL-01 | Phase 7 | Pending |
-| OBS-01 | Phase 7 | Pending |
-| OBS-02 | Phase 7 | Pending |
-| OBS-03 | Phase 7 | Pending |
-| REC-01 | Phase 8 | Pending |
-| REC-02 | Phase 8 | Pending |
-| REC-03 | Phase 8 | Pending |
-| REC-04 | Phase 8 | Pending |
-| FFT-01 | Phase 8 | Pending |
-| FFT-02 | Phase 8 | Pending |
-| FFT-03 | Phase 8 | Pending |
-| FFT-04 | Phase 8 | Pending |
-| HOP-01 | Phase 8 | Pending |
-| HOP-02 | Phase 8 | Pending |
-| HOP-03 | Phase 8 | Pending |
-| HOP-04 | Phase 8 | Pending |
+| MSG-01 | Phase 1 | Pending |
+| MSG-02 | Phase 1 | Pending |
+| MSG-03 | Phase 1 | Pending |
+| MSG-04 | Phase 1 | Pending |
+| MSG-05 | Phase 1 | Pending |
+| MSG-06 | Phase 1 | Pending |
+| DET-01 | Phase 1 | Pending |
+| DET-02 | Phase 1 | Pending |
+| DET-03 | Phase 1 | Pending |
+| DET-04 | Phase 1 | Pending |
+| DET-05 | Phase 1 | Pending |
+| DET-06 | Phase 1 | Pending |
+| PERF-01 | Phase 1 | Pending |
+| PERF-02 | Phase 1 | Pending |
+| SWP-01 | Phase 2 | Pending |
+| SWP-02 | Phase 2 | Pending |
+| SWP-03 | Phase 2 | Pending |
+| REC-01 | Phase 2 | Pending |
+| REC-02 | Phase 2 | Pending |
+| REC-03 | Phase 2 | Pending |
+| REC-04 | Phase 2 | Pending |
+| MAP-01 | Phase 2 | Pending |
+| MAP-02 | Phase 2 | Pending |
+| MAP-03 | Phase 2 | Pending |
+| REL-01 | Phase 3 | Pending |
+| REL-02 | Phase 3 | Pending |
+| REL-03 | Phase 3 | Pending |
+| ADV-01 | Phase 4 | Pending |
+| ADV-02 | Phase 4 | Pending |
+| ADV-03 | Phase 4 | Pending |
+| HW-01 | Phase 4 | Pending |
+| HW-02 | Phase 4 | Pending |
 
 **Coverage:**
-- v1 requirements: 32 total (all complete)
-- v2 requirements: 27 total (11 complete, 16 pending)
-- Mapped to phases: 32 (v1 complete), 27 (v2 — Phase 6 complete, Phases 7-8 pending)
-- Unmapped: 0 ✓
+- v1 requirements: 32 total
+- Mapped to phases: 32
+- Unmapped: 0
 
 ---
-*Requirements defined: 2026-03-29*
-*Last updated: 2026-03-30 — Phase 6 complete*
+*Requirements defined: 2026-04-13*
+*Last updated: 2026-04-13 after initial definition*
