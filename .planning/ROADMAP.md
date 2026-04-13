@@ -49,8 +49,8 @@ Plans:
 **Plans**: 4 plans
 Plans:
 - [x] 02-01-PLAN.md — Action interfaces (Sweep.action, RecordIQ.action) + sigmf pip dep + nav_msgs apt dep
-- [ ] 02-02-PLAN.md — Sweep action server: per-hop feedback, Tukey-blended stitching, cancel with frequency restore
-- [ ] 02-03-PLAN.md — IQ recorder action server: SigMF ci8 write thread, TF pose, driver fan-out services
+- [x] 02-02-PLAN.md — Sweep action server: per-hop feedback, Tukey-blended stitching, cancel with frequency restore
+- [x] 02-03-PLAN.md — IQ recorder action server: SigMF ci8 write thread, TF pose, driver fan-out services
 - [ ] 02-04-PLAN.md — RF occupancy grid: EMA power accumulation per cell, nav_msgs/OccupancyGrid publish, autonomy launch
 **UI hint**: no
 
