@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 03-reliability/03-03-PLAN.md
-last_updated: "2026-04-13T05:30:00.000Z"
+stopped_at: Completed 04-advanced-signal-intelligence/04-01-PLAN.md
+last_updated: "2026-04-13T06:26:00.000Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 11
-  completed_plans: 11
-  percent: 75
+  total_plans: 15
+  completed_plans: 12
+  percent: 80
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-04-13)
 
 ## Current Position
 
-Phase: 3 of 4 complete (Reliability — AGC, async param, USB disconnect)
-Status: Phase 3 complete — 34/34 tests pass — ready for Phase 4
+Phase: 4 of 4 in progress (Advanced Signal Intelligence — anomaly, emitter loc, cyclo, multi-radio)
+Status: Phase 4 Plan 1 complete — message schema and multi-radio infrastructure delivered
 Last activity: 2026-04-13
 
-Progress: [███████░░░] 75%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
@@ -83,6 +83,9 @@ Recent decisions affecting current work:
 - [Phase 02-robot-autonomy-integration]: MagicMock auto-generated request fields cause freq validation abort — must explicitly set goal fields in cancel test
 - [Phase 02-robot-autonomy-integration]: First observation sets cell directly (not EMA from noise floor) for faster convergence to observed signal level
 - [Phase 02-robot-autonomy-integration]: Robot position used as grid spatial anchor (single HackRF has no direction-of-arrival; Phase 4 KrakenSDR needed for AOA)
+- [04-01]: device_index declared in _declare_parameters() and read in on_configure() before HackRF() call; default 0 for backward compatibility
+- [04-01]: emitter_loc_node and cyclo_node entry points registered in setup.py now to unblock 04-02/04-04 without setup.py changes later
+- [04-01]: multi_radio.launch.py uses OpaqueFunction for dynamic N-node generation at launch time
 
 ### Pending Todos
 
@@ -96,6 +99,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-13T04:16:30.199Z
-Stopped at: Completed 02-robot-autonomy-integration/02-04-PLAN.md
+Last session: 2026-04-13T06:26:00.000Z
+Stopped at: Completed 04-advanced-signal-intelligence/04-01-PLAN.md
 Resume file: None
