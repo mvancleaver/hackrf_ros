@@ -7,10 +7,10 @@
 
 ### Messages & Integration
 
-- [ ] **MSG-01**: PSD published as SpectrumStamped.msg with header.stamp and frame_id
+- [x] **MSG-01**: PSD published as SpectrumStamped.msg with header.stamp and frame_id
 - [ ] **MSG-02**: Static TF transform published for configurable antenna frame (base_link -> hackrf_antenna)
-- [ ] **MSG-03**: RF detections published as RFDetectionArray.msg with noise floor, per-signal freq/BW/power/SNR/classification/ID
-- [ ] **MSG-04**: RF environment summary published at 1 Hz with emitter count, band occupancy, strongest signal
+- [x] **MSG-03**: RF detections published as RFDetectionArray.msg with noise floor, per-signal freq/BW/power/SNR/classification/ID
+- [x] **MSG-04**: RF environment summary published at 1 Hz with emitter count, band occupancy, strongest signal
 - [ ] **MSG-05**: All streaming topics use BEST_EFFORT QoS (no back-pressure on pipeline)
 - [ ] **MSG-06**: Executor upgraded to MultiThreadedExecutor with ReentrantCallbackGroup
 

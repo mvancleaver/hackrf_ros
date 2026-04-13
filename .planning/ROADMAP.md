@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. PSD publishing sustains 10 Hz on the Jetson ARM64 target (measured via `ros2 topic hz /hackrf/spectrum`)
 **Plans**: 4 plans
 Plans:
-- [ ] 01-01-PLAN.md — Define 4 custom message types (SpectrumStamped, RFDetection, RFDetectionArray, RFEnvironment) and register in hackrf_interfaces
+- [x] 01-01-PLAN.md — Define 4 custom message types (SpectrumStamped, RFDetection, RFDetectionArray, RFEnvironment) and register in hackrf_interfaces
 - [ ] 01-02-PLAN.md — Upgrade driver: scipy.fft, SpectrumStamped publish, TF broadcaster, BEST_EFFORT QoS, MultiThreadedExecutor
 - [ ] 01-03-PLAN.md — Create cfar_node.py: CA-CFAR detection, persistence tracking, band classification, RFDetectionArray/RFEnvironment publish
 - [ ] 01-04-PLAN.md — Create sensor_pipeline.launch.py and verify complete pipeline with hardware checkpoint
@@ -79,7 +79,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Sensor Foundations | 0/4 | In progress | - |
+| 1. Sensor Foundations | 1/4 | In progress | - |
 | 2. Robot Autonomy Integration | 0/? | Not started | - |
 | 3. Reliability | 0/? | Not started | - |
 | 4. Advanced Signal Intelligence | 0/? | Not started | - |
