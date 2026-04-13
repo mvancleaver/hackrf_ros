@@ -20,6 +20,7 @@ import numpy as np
 import scipy.fft
 
 import rclpy
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -30,6 +31,9 @@ from rcl_interfaces.msg import (
     IntegerRange,
     SetParametersResult,
 )
+from geometry_msgs.msg import TransformStamped
+from tf2_ros import StaticTransformBroadcaster
+
 from diagnostic_updater import Updater
 from diagnostic_msgs.msg import DiagnosticStatus
 
@@ -105,6 +109,18 @@ class HackRFLifecycleNode(LifecycleNode):
         )
         self._spectrum_pub = self.create_publisher(
             SpectrumStamped, '/hackrf/spectrum', qos_stream)
+
+        # Static TF: parent_frame -> antenna_frame (per D-07, D-08)
+        self._tf_broadcaster = StaticTransformBroadcaster(self)
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = self.get_clock().now().to_msg()
+        tf_msg.header.frame_id = self.get_parameter('parent_frame').value
+        tf_msg.child_frame_id = self.get_parameter('antenna_frame').value
+        tf_msg.transform.translation.x = self.get_parameter('antenna_x').value
+        tf_msg.transform.translation.y = self.get_parameter('antenna_y').value
+        tf_msg.transform.translation.z = self.get_parameter('antenna_z').value
+        tf_msg.transform.rotation.w = 1.0  # identity quaternion
+        self._tf_broadcaster.sendTransform(tf_msg)
 
         # Sweep service on a reentrant callback group so it doesn't block
         # the timer callback during long sweeps
@@ -222,6 +238,18 @@ class HackRFLifecycleNode(LifecycleNode):
                     from_value=0, to_value=62, step=0)]))
         self.declare_parameter('amp_enabled', False,
             ParameterDescriptor(description='RF amplifier (adds ~11 dB gain + noise)'))
+
+        # TF frame parameters (D-07, D-08)
+        self.declare_parameter('antenna_frame', 'hackrf_antenna',
+            ParameterDescriptor(description='TF frame_id for the antenna (child frame)'))
+        self.declare_parameter('parent_frame', 'base_link',
+            ParameterDescriptor(description='TF parent frame (robot body)'))
+        self.declare_parameter('antenna_x', 0.0,
+            ParameterDescriptor(description='Antenna X offset from parent_frame (m)'))
+        self.declare_parameter('antenna_y', 0.0,
+            ParameterDescriptor(description='Antenna Y offset from parent_frame (m)'))
+        self.declare_parameter('antenna_z', 0.0,
+            ParameterDescriptor(description='Antenna Z offset from parent_frame (m)'))
 
     def _param_callback(self, params: list[Parameter]) -> SetParametersResult:
         needs_restart = False
@@ -416,7 +444,7 @@ class HackRFLifecycleNode(LifecycleNode):
 
         msg = SpectrumStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'hackrf_antenna'  # Task 2 makes parametric
+        msg.header.frame_id = self.get_parameter('antenna_frame').value
         msg.center_frequency_hz = float(self.get_parameter('center_frequency').value)
         msg.sample_rate_hz = float(sample_rate)
         msg.bin_width_hz = float(sample_rate) / float(FFT_SIZE)
@@ -592,11 +620,14 @@ class HackRFLifecycleNode(LifecycleNode):
 def main(args=None):
     rclpy.init(args=args)
     node = HackRFLifecycleNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
 
