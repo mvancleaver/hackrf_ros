@@ -1,15 +1,106 @@
 """Tests for AnomalyDetector (ADV-01).
 
-RED phase: AnomalyDetector does not exist yet. All tests fail.
+Tests for EMA anomaly detection baseline learning, warmup suppression,
+dual trigger (power spike + idle-band new emitter), and diagnostics integration.
 Run: pytest test/test_anomaly_detector.py -v
 """
 from __future__ import annotations
+import sys
+import types
 import time
 import numpy as np
 import pytest
 
-# AnomalyDetector will live in hackrf_ros.cfar_node
-from hackrf_ros.cfar_node import AnomalyDetector
+# ---------------------------------------------------------------------------
+# Minimal ROS2 + dependency stubs so cfar_node can be imported without rclpy
+# ---------------------------------------------------------------------------
+
+# rclpy core
+_rclpy = types.ModuleType('rclpy')
+_rclpy.init = lambda args=None: None
+_rclpy.spin = lambda node: None
+_rclpy.try_shutdown = lambda: None
+_rclpy_node = types.ModuleType('rclpy.node')
+_rclpy_node.Node = object
+_rclpy_qos = types.ModuleType('rclpy.qos')
+_rclpy_qos.QoSProfile = object
+_rclpy_qos.ReliabilityPolicy = type(
+    'ReliabilityPolicy', (), {'RELIABLE': 'RELIABLE', 'BEST_EFFORT': 'BEST_EFFORT'})()
+_rclpy_qos.HistoryPolicy = type(
+    'HistoryPolicy', (), {'KEEP_LAST': 'KEEP_LAST'})()
+_rclpy_cb = types.ModuleType('rclpy.callback_groups')
+_rclpy_cb.ReentrantCallbackGroup = object
+
+sys.modules.setdefault('rclpy', _rclpy)
+sys.modules.setdefault('rclpy.node', _rclpy_node)
+sys.modules.setdefault('rclpy.qos', _rclpy_qos)
+sys.modules.setdefault('rclpy.callback_groups', _rclpy_cb)
+
+# diagnostic_updater stub
+_diag_upd = types.ModuleType('diagnostic_updater')
+
+
+class _DiagStatusWrapper:
+    """Minimal stub for DiagnosticStatusWrapper."""
+
+    OK = 0
+    WARN = 1
+    ERROR = 2
+
+    def summary(self, level, msg):
+        self._level = level
+        self._msg = msg
+
+
+class _Updater:
+    """Minimal stub for diagnostic_updater.Updater."""
+
+    def __init__(self, node=None):
+        pass
+
+    def setHardwareID(self, hw_id):
+        pass
+
+    def add(self, name, callback):
+        pass
+
+
+_diag_upd.Updater = _Updater
+_diag_upd.DiagnosticStatusWrapper = _DiagStatusWrapper
+sys.modules.setdefault('diagnostic_updater', _diag_upd)
+
+# hackrf_interfaces stubs
+_hi = types.ModuleType('hackrf_interfaces')
+_hi_msg = types.ModuleType('hackrf_interfaces.msg')
+
+
+class _RFDetection:
+    center_frequency_hz: float = 0.0
+    bandwidth_hz: float = 0.0
+    power_dbm: float = 0.0
+    snr_db: float = 0.0
+    classification: str = ''
+    persistence_frames: int = 0
+    detection_id: int = 0
+    is_anomaly: bool = False
+    anomaly_type: str = ''
+    cyclo_classification: str = ''
+    cyclo_confidence: float = 0.0
+
+
+_hi_msg.SpectrumStamped = object
+_hi_msg.RFDetection = _RFDetection
+_hi_msg.RFDetectionArray = object
+_hi_msg.RFEnvironment = object
+sys.modules.setdefault('hackrf_interfaces', _hi)
+sys.modules.setdefault('hackrf_interfaces.msg', _hi_msg)
+
+# ---------------------------------------------------------------------------
+# Now import the module under test
+# ---------------------------------------------------------------------------
+
+# AnomalyDetector lives in hackrf_ros.cfar_node
+from hackrf_ros.cfar_node import AnomalyDetector  # noqa: E402
 
 N_BINS = 4096
 ALPHA = 0.05
