@@ -427,13 +427,6 @@ class TestCancelPath(unittest.TestCase):
         hop_centers = self.m._plan_hops(freq_min, freq_max, sample_rate, step_hz=0)
 
         set_freq_calls = []
-
-        def fake_set_center_freq(hz):
-            set_freq_calls.append(hz)
-            return True
-
-        node._set_center_freq = fake_set_center_freq
-
         hop_num = [0]
 
         def fake_wait_for_spectrum(timeout_s):
@@ -444,35 +437,27 @@ class TestCancelPath(unittest.TestCase):
         node._wait_for_spectrum = fake_wait_for_spectrum
         node._latest_spectrum = self._make_mock_spectrum(2.41e9, sample_rate)
         node.get_logger = MagicMock(return_value=MagicMock())
-        node.get_parameter = MagicMock(return_value=MagicMock(value=saved_freq))
+
+        # Properly mock get_parameter so spectrum_timeout_s returns 3.0
+        timeout_param = MagicMock()
+        timeout_param.get_parameter_value.return_value.double_value = 3.0
+        node.get_parameter = MagicMock(return_value=timeout_param)
 
         feedback_calls = []
 
         goal_handle = MagicMock()
         goal_handle.publish_feedback = lambda fb: feedback_calls.append(fb)
-
-        # Simulate cancel during second hop
-        call_count = [0]
-        original_is_cancel = property(lambda self: call_count[0] >= 1)
-
-        # Cancel after 1 hop completes (check on second iteration)
-        cancel_after = [1]
-        hop_iter = [0]
-
-        class CancelOnSecond:
-            @property
-            def is_cancel_requested(self):
-                return hop_iter[0] >= cancel_after[0]
-
-        # Patch goal_handle to use cancellable property
+        # Must set request fields explicitly — MagicMock auto-fields give freq_max==freq_min=1.0
+        goal_handle.request = MagicMock()
+        goal_handle.request.freq_min_hz = freq_min
+        goal_handle.request.freq_max_hz = freq_max
+        goal_handle.request.step_hz = 0.0
+        goal_handle.request.averaging = 1
         goal_handle.is_cancel_requested = False  # start False
 
-        # We'll patch the _execute_sweep to inject cancel after first hop
-        # by making _set_center_freq track calls and flip cancel on 2nd call
+        # Cancel on 2nd set_center_freq call (= start of 2nd hop)
         def smart_set_freq(hz):
             set_freq_calls.append(hz)
-            # After first hop's spectrum collected and we set 2nd hop center:
-            # flip cancel_requested
             if len(set_freq_calls) == 2:
                 goal_handle.is_cancel_requested = True
             return True
@@ -481,7 +466,7 @@ class TestCancelPath(unittest.TestCase):
 
         result = self.m.SweepActionNode._execute_sweep(node, goal_handle)
 
-        # The last call to _set_center_freq should be restoring saved_freq
+        # The last call to _set_center_freq must be the saved freq restore
         self.assertIn(saved_freq, set_freq_calls,
                       f"saved freq {saved_freq} not in {set_freq_calls}")
         # Result should indicate cancelled with partial data
