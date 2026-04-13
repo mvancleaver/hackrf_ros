@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 04-04-PLAN.md
-last_updated: "2026-04-13T06:33:22.281Z"
+stopped_at: Completed 04-advanced-signal-intelligence/04-03-PLAN.md
+last_updated: "2026-04-13T06:36:40.499Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 15
-  completed_plans: 14
-  percent: 93
+  completed_plans: 15
+  percent: 100
 ---
 
 # Project State
@@ -58,6 +58,7 @@ Progress: [████████░░] 87%
 | Phase 02-robot-autonomy-integration P02 | 20 | 2 tasks | 3 files |
 | Phase 02-robot-autonomy-integration P04 | 4 | 2 tasks | 5 files |
 | Phase 04 P04 | 4 | 2 tasks | 2 files |
+| Phase 04 P03 | 460 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,8 @@ Recent decisions affecting current work:
 - [04-02]: ROS2 stubs in test file allow pytest without rclpy (same pattern as test_rf_map_node.py)
 - [04-02]: Seeding frame returns zeros to avoid transient false alarms at baseline initialization
 - [Phase 04]: BLE classifier uses power_cv only (not sfm-gated): BLE hop windows have flat spectrum, sfm guard incorrectly blocks detection
+- [Phase 04]: Multi-start Nelder-Mead with RSSI-weighted centroid initial guess handles symmetric observation geometries where equal-distance poses make path loss exponent n unidentifiable from single-start
+- [Phase 04]: Soft penalty (1e6*(n-bound)^2) in cost function enforces physical range for n [1.5, 6.0] without requiring L-BFGS-B — Nelder-Mead retains robustness to irregular cost landscapes
 
 ### Pending Todos
 
@@ -104,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-13T06:33:22.276Z
-Stopped at: Completed 04-04-PLAN.md
+Last session: 2026-04-13T06:36:40.495Z
+Stopped at: Completed 04-advanced-signal-intelligence/04-03-PLAN.md
 Resume file: None
