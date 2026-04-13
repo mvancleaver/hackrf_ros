@@ -1,7 +1,5 @@
 """Tests for cyclo_classify (ADV-03).
 
-RED phase: cyclo_node does not exist yet. All tests fail.
-
 Synthetic IQ generation:
 - WiFi: add strong spectral lines at OFDM pilot bin positions 448 and 1344
   (802.11n/ac subcarriers ±7 and ±21 at 312.5 kHz spacing, per RESEARCH.md)
@@ -14,6 +12,51 @@ Synthetic IQ generation:
 Run: pytest test/test_cyclo_classifier.py -v
 """
 from __future__ import annotations
+import sys
+import types
+
+# ---------------------------------------------------------------------------
+# Minimal ROS2 stubs — cyclo_classify is a pure function, no ROS2 runtime
+# required. These stubs allow importing hackrf_ros.cyclo_node without rclpy.
+# ---------------------------------------------------------------------------
+rclpy_mod = types.ModuleType('rclpy')
+rclpy_mod.init = lambda args=None: None
+rclpy_mod.try_shutdown = lambda: None
+rclpy_node_mod = types.ModuleType('rclpy.node')
+rclpy_node_mod.Node = object
+rclpy_qos_mod = types.ModuleType('rclpy.qos')
+rclpy_qos_mod.QoSProfile = object
+rclpy_qos_mod.ReliabilityPolicy = type(
+    'ReliabilityPolicy', (), {'RELIABLE': 'RELIABLE', 'BEST_EFFORT': 'BEST_EFFORT'})()
+rclpy_qos_mod.HistoryPolicy = type(
+    'HistoryPolicy', (), {'KEEP_LAST': 'KEEP_LAST'})()
+rclpy_cb_mod = types.ModuleType('rclpy.callback_groups')
+rclpy_cb_mod.ReentrantCallbackGroup = object
+rclpy_exec_mod = types.ModuleType('rclpy.executors')
+rclpy_exec_mod.MultiThreadedExecutor = object
+
+sys.modules.setdefault('rclpy', rclpy_mod)
+sys.modules.setdefault('rclpy.node', rclpy_node_mod)
+sys.modules.setdefault('rclpy.qos', rclpy_qos_mod)
+sys.modules.setdefault('rclpy.callback_groups', rclpy_cb_mod)
+sys.modules.setdefault('rclpy.executors', rclpy_exec_mod)
+
+# std_msgs stub
+std_msgs_mod = types.ModuleType('std_msgs')
+std_msgs_msg_mod = types.ModuleType('std_msgs.msg')
+std_msgs_msg_mod.Float32MultiArray = object
+sys.modules.setdefault('std_msgs', std_msgs_mod)
+sys.modules.setdefault('std_msgs.msg', std_msgs_msg_mod)
+
+# hackrf_interfaces stub — RFDetectionArray and RFDetection are not used
+# by cyclo_classify (pure function), so minimal stubs suffice.
+hackrf_iface_mod = types.ModuleType('hackrf_interfaces')
+hackrf_iface_msg_mod = types.ModuleType('hackrf_interfaces.msg')
+hackrf_iface_msg_mod.RFDetectionArray = object
+hackrf_iface_msg_mod.RFDetection = object
+sys.modules.setdefault('hackrf_interfaces', hackrf_iface_mod)
+sys.modules.setdefault('hackrf_interfaces.msg', hackrf_iface_msg_mod)
+
 import numpy as np
 import pytest
 
