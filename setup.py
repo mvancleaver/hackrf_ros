@@ -13,6 +13,7 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/hackrf.launch.py',
             'launch/spectrum.launch.py',
+            'launch/sensor_pipeline.launch.py',
         ]),
         ('share/' + package_name + '/config', ['config/hackrf_rx.yaml']),
     ],
