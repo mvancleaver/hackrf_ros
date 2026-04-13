@@ -2,7 +2,7 @@
 
 Implements SweepActionNode — a standalone ROS2 node that:
 - Accepts wideband sweep goals via /hackrf/sweep action
-- Retunes the driver (/hackrf_node) hop-by-hop via AsyncParametersClient
+- Retunes the driver (/hackrf_node) hop-by-hop via SetParameters service
 - Collects SpectrumStamped messages per hop from /hackrf/spectrum
 - Tukey-blends hops in linear domain to produce a stitched composite PSD
 - Publishes per-hop feedback and returns the full stitched result on success
@@ -32,8 +32,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.parameter_client import AsyncParametersClient
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rcl_interfaces.srv import SetParameters
 
 from hackrf_interfaces.action import Sweep
 from hackrf_interfaces.msg import SpectrumStamped
@@ -190,7 +190,7 @@ class SweepActionNode(Node):
     """ROS2 action server that orchestrates a wideband frequency sweep.
 
     Accepts goals from /hackrf/sweep (hackrf_interfaces/action/Sweep).
-    Retunes /hackrf_node via AsyncParametersClient, collects SpectrumStamped
+    Retunes /hackrf_node via SetParameters service, collects SpectrumStamped
     messages per hop, Tukey-blends them in linear domain, and returns a
     stitched composite PSD as the action result.
     """
@@ -229,8 +229,14 @@ class SweepActionNode(Node):
             callback_group=sub_cb_group,
         )
 
-        # --- AsyncParametersClient ---
-        self._param_client = AsyncParametersClient(self, driver_name)
+        # --- SetParameters service client ---
+        # Strip leading slash for service name construction
+        node_name = driver_name.lstrip('/')
+        svc_name = f'/{node_name}/set_parameters'
+        self._set_param_client = self.create_client(
+            SetParameters, svc_name, callback_group=sub_cb_group
+        )
+        self._driver_name = driver_name
 
         # --- Action server ---
         action_cb_group = ReentrantCallbackGroup()
@@ -270,20 +276,55 @@ class SweepActionNode(Node):
     # ------------------------------------------------------------------
 
     def _set_center_freq(self, freq_hz: float) -> bool:
-        """Set center_frequency on the driver node via AsyncParametersClient.
+        """Set center_frequency on the driver node via SetParameters service.
+
+        Called from within the action execute callback (running under
+        MultiThreadedExecutor).  Must NOT call rclpy.spin_until_future_complete
+        here — that creates a second executor for the same node and deadlocks
+        the subscription callbacks, starving the spectrum subscriber.
+        Instead, block on a threading.Event; the running executor resolves
+        the future and fires the done-callback on its own thread.
 
         Returns:
             True on success, False on timeout or error.
         """
         try:
-            future = self._param_client.set_parameters(
-                [Parameter('center_frequency', Parameter.Type.DOUBLE, freq_hz)]
-            )
-            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-            if future.done():
+            if not self._set_param_client.wait_for_service(timeout_sec=2.0):
+                self.get_logger().warn('set_parameters service not available')
+                return False
+
+            req = SetParameters.Request()
+            p = Parameter('center_frequency', Parameter.Type.DOUBLE, freq_hz)
+            req.parameters = [p.to_parameter_msg()]
+
+            done_event = threading.Event()
+            result_holder: list = [None]
+
+            def _done_cb(future):
+                result_holder[0] = future
+                done_event.set()
+
+            future = self._set_param_client.call_async(req)
+            future.add_done_callback(_done_cb)
+
+            fired = done_event.wait(timeout=5.0)
+            if not fired:
+                self.get_logger().warn(
+                    f'_set_center_freq({freq_hz:.3e}): future did not complete')
+                return False
+
+            fut = result_holder[0]
+            if fut is None or fut.cancelled() or fut.result() is None:
+                self.get_logger().warn(
+                    f'_set_center_freq({freq_hz:.3e}): bad future result')
+                return False
+
+            results = fut.result().results
+            if results and results[0].successful:
                 return True
+            reason = results[0].reason if results else 'no result'
             self.get_logger().warn(
-                f'_set_center_freq({freq_hz:.3e}): future did not complete')
+                f'_set_center_freq({freq_hz:.3e}) rejected: {reason}')
             return False
         except Exception as exc:
             self.get_logger().error(f'_set_center_freq error: {exc}')
