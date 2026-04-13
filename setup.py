@@ -29,6 +29,7 @@ setup(
             'spectrum_node = hackrf_ros.spectrum_node:main',
             'sweep_node = hackrf_ros.sweep_node:main',
             'sweep_display = hackrf_ros.sweep_display:main',
+            'cfar_node = hackrf_ros.cfar_node:main',
         ],
     },
 )
