@@ -62,7 +62,11 @@ Plans:
   1. When ADC clip rate exceeds threshold, LNA/VGA gains are automatically reduced within one feedback cycle — observable via the `/diagnostics` topic showing gain adjustment events
   2. A `ros2 param set` command on a streaming node completes in under 100 ms and does not stall PSD publishing (verifiable via `ros2 topic hz` remaining stable during the set)
   3. Physically unplugging the HackRF while streaming causes the `/diagnostics` topic to transition to WARN then ERROR state within 2 seconds, without crashing the node
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 03-01-PLAN.md — AGC: _agc_tick() with hysteresis, clip-rate feedback, LNA-first gain reduction, diagnostics reporting
+- [ ] 03-02-PLAN.md — Async param: offload stop_rx/start_rx to _param_worker daemon thread, _param_callback returns immediately
+- [ ] 03-03-PLAN.md — USB disconnect: _handle_usb_fault(), _rx_callback crash-safe, WARN->ERROR escalation in diagnostics
 **UI hint**: no
 
 ### Phase 4: Advanced Signal Intelligence
@@ -86,5 +90,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Sensor Foundations | 1/4 | In progress | - |
 | 2. Robot Autonomy Integration | 1/4 | In Progress|  |
-| 3. Reliability | 0/? | Not started | - |
+| 3. Reliability | 0/3 | Not started | - |
 | 4. Advanced Signal Intelligence | 0/? | Not started | - |
