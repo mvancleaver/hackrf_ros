@@ -1,10 +1,8 @@
-# Roadmap: HackRF ROS2 Driver
+# Roadmap: HackRF ROS2 RF Sensor
 
 ## Overview
 
-This milestone transforms a fully functional v1.x driver into a production-reliable system. The work is ordered strictly by dependency: typed exceptions and input validation are established first (every subsequent feature raises them), then Redis reconnection and IQ sequence numbers are locked in (bridge stability and gap detection are prerequisites for observability and recording respectively), and finally signal capabilities are layered on top of that hardened foundation.
-
-Three-package architecture (pymayhem → hackrf_driver → hackrf_ros) is preserved exactly. All new features integrate at well-defined tap points: two new queue taps in `_rx_callback`, a metrics accumulator in `RedisBridge`, a reconnect retry loop in `BridgeNode`, and exception modules in both pymayhem and hackrf_driver.
+Starting from an existing lifecycle driver with calibrated PSD publishing, this roadmap builds four sequential capabilities. Phase 1 adds the sensor intelligence layer — stamped messages, TF, CFAR detection, band classification, and FFT performance — converting raw spectrum data into actionable RFDetection messages any robot can consume. Phase 2 wires that intelligence into robot autonomy via action servers for sweep and IQ recording, plus an RF occupancy grid for nav stack integration. Phase 3 hardens the runtime — AGC, async parameter handling, and USB disconnect recovery — before introducing advanced processing in Phase 4: wideband anomaly detection, emitter localization, cyclostationary feature extraction, and multi-radio architecture.
 
 ## Phases
 
@@ -14,156 +12,69 @@ Three-package architecture (pymayhem → hackrf_driver → hackrf_ros) is preser
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [x] **Phase 1: RX Pipeline Correctness** - Fix thread-safety bugs and add error recovery to the existing IQ pipeline (completed 2026-03-30)
-- [x] **Phase 2: Mayhem Serial Interface** - Build serial control for Mayhem firmware and resolve the mode-conflict question (completed 2026-03-30)
-- [x] **Phase 3: Redis Bridge** - Stream IQ data and device state to Redis; accept control commands via Redis (completed 2026-03-30)
-- [x] **Phase 4: TX Authorization** - Add safe, authorized transmission with frequency allowlist and hardware guardrails (completed 2026-03-30)
-- [x] **Phase 5: PyMayhem Refactor** - Extract standalone pymayhem package, Redis-native driver, ROS2 bridge plugin (completed 2026-03-30)
-- [ ] **Phase 6: Foundation Hardening** - Typed exceptions, input validation, Redis reconnection, IQ sequence numbers, TX dry-run, antenna service, legacy deprecation
-- [ ] **Phase 7: Observability & Reliability** - Device health watchdog, metrics hash, dead-letter queue
-- [ ] **Phase 8: Signal Capabilities** - IQ recording to SigMF, headless spectral analysis, programmable frequency hopping
+- [ ] **Phase 1: Sensor Foundations** - Add stamped messages, TF, CFAR detection + classification, and FFT performance to make the driver a complete RF sensor
+- [ ] **Phase 2: Robot Autonomy Integration** - Action servers for sweep and IQ recording, plus RF occupancy grid for nav stack
+- [ ] **Phase 3: Reliability** - AGC, async parameter retuning, and USB disconnect recovery to harden the runtime
+- [ ] **Phase 4: Advanced Signal Intelligence** - Wideband anomaly detection, emitter localization, cyclostationary features, and multi-radio architecture
 
 ## Phase Details
 
-### Phase 1: RX Pipeline Correctness
-**Goal**: The RX pipeline is thread-safe, recovers from USB errors, validates all parameters, and produces clean structured logs
+### Phase 1: Sensor Foundations
+**Goal**: Any robot node can subscribe to calibrated, timestamped RF detections with stable IDs, band labels, and TF frame metadata
 **Depends on**: Nothing (first phase)
-**Requirements**: RX-01, RX-02, RX-03, RX-04, RX-05, RX-06, RX-07
+**Requirements**: MSG-01, MSG-02, MSG-03, MSG-04, MSG-05, MSG-06, DET-01, DET-02, DET-03, DET-04, DET-05, DET-06, PERF-01, PERF-02
 **Success Criteria** (what must be TRUE):
-  1. IQ samples flow continuously without crashes or data corruption when the ROS2 timer and USB callback run concurrently
-  2. When the HackRF is unplugged and replugged, the driver reconnects automatically without a node restart
-  3. Setting frequency, gain, or sample rate to an out-of-range value produces a clear error log and leaves the device unchanged
-  4. The node starts up, streams IQ, and shuts down cleanly with no deadlocks and no bare print statements in the log
-**Plans**: 3 plans
-
-Plans:
-- [x] 01-01-PLAN.md — Replace buffer with dual queues, strip RX callback, fix publish consumer (RX-01, RX-07)
-- [x] 01-02-PLAN.md — Reconnect loop with exponential backoff, deadlock guard, lifecycle shutdown (RX-02, RX-05, RX-06)
-- [x] 01-03-PLAN.md — Parameter validation, class rename, logging cleanup, plotter/config/setup alignment (RX-03, RX-04)
-
-### Phase 2: Mayhem Serial Interface
-**Goal**: The driver communicates with Mayhem firmware over serial, can discover and switch apps, update frequency, and confirm the mode-conflict answer empirically
-**Depends on**: Phase 1
-**Requirements**: MAY-01, MAY-02, MAY-03, MAY-04, MAY-05, MAY-06
-**Success Criteria** (what must be TRUE):
-  1. The driver opens /dev/ttyACM1 at startup, queries applist, and logs the discovered apps without manual intervention
-  2. A ROS2 service call switches the active Mayhem app by name (e.g., capture -> scanner)
-  3. A setfreq command updates the frequency within the active app and radioinfo confirms the change
-  4. The mode-conflict behavior between pyhackrf2 IQ streaming and Mayhem serial is tested and documented, with the driver failing loudly if the combination is incompatible
-**Plans**: 3 plans
-
-Plans:
-- [x] 02-01-PLAN.md — Create hackrf_ros_interfaces CMake package with AppStart.srv and SetFreq.srv (MAY-03, MAY-04)
-- [x] 02-02-PLAN.md — Implement MayhemSerial helper class with serial lifecycle, command methods, and unit tests (MAY-01, MAY-02, MAY-03, MAY-04, MAY-05)
-- [x] 02-03-PLAN.md — Wire MayhemSerial into HackRFNode: services, status topic, mode coexistence check (MAY-01, MAY-03, MAY-04, MAY-05, MAY-06)
-
-### Phase 3: Redis Bridge
-**Goal**: IQ samples and device state are published to Redis continuously, and external callers can reconfigure the device via Redis commands
-**Depends on**: Phase 2
-**Requirements**: RED-01, RED-02, RED-03, RED-04, RED-05
-**Success Criteria** (what must be TRUE):
-  1. An external Redis client can read live IQ samples from hackrf:iq:stream without causing the ROS2 executor to block or stall
-  2. hackrf:state reflects current frequency, gain, sample rate, and streaming status and updates within one second of any configuration change
-  3. Writing a valid command to hackrf:cmd changes the device configuration and the change is visible in hackrf:state
-  4. All Redis keys use the hackrf: namespace prefix consistently; the stream is trimmed by MAXLEN and does not grow unboundedly
-**Plans**: 2 plans
-
-Plans:
-- [x] 03-01-PLAN.md — RedisBridge class with TDD, package config (RED-01, RED-04, RED-05)
-- [x] 03-02-PLAN.md — Wire RedisBridge into HackRFNode; MayhemSerial _active_app; state/command integration (RED-02, RED-03, RED-04, RED-05)
-
-### Phase 4: TX Authorization
-**Goal**: The driver can transmit signals via pyhackrf2, gated behind one-token-per-TX authorization, a frequency allowlist, and an explicit antenna confirmation
-**Depends on**: Phase 3
-**Requirements**: TX-01, TX-02, TX-03, TX-04, TX-05, TX-06, TX-07
-**Success Criteria** (what must be TRUE):
-  1. A TX command with no authorization token is rejected before any transmission occurs
-  2. A TX command targeting a restricted frequency (cellular, aviation, emergency) is hard-rejected regardless of authorization
-  3. An authorized TX command on a permitted frequency proceeds only after the antenna confirmation flag is set, then the auth token is consumed and cannot be reused
-  4. On node shutdown, any in-progress TX is stopped and the device returns to a known safe state
-**Plans**: 2 plans
-
-Plans:
-- [x] 04-01-PLAN.md — TXController class: frequency allowlist, antenna confirmation, Lua GETDEL auth token (TX-02, TX-03, TX-04, TX-05)
-- [x] 04-02-PLAN.md — Wire TXController into HackRFNode and RedisBridge command handlers; TX shutdown (TX-01, TX-06, TX-07)
-
-### Phase 5: PyMayhem Refactor
-**Goal**: Extract a standalone `pymayhem` Python package from the Mayhem serial code, refactor the HackRF driver to be Redis-native (no ROS2 dependency in core), and create a thin ROS2 bridge node that reads IQ from Redis and publishes to ROS2 topics
-**Depends on**: Phase 4
-**Requirements**: REF-01, REF-02, REF-03, REF-04, REF-05, REF-06, REF-07
-**Success Criteria** (what must be TRUE):
-  1. `pymayhem` is a standalone pip-installable package that controls the PortaPack via serial without any ROS2 or Redis dependency — `pip install pymayhem && python -c "from pymayhem import MayhemClient"` works
-  2. The HackRF driver runs standalone with Redis as its only external interface — no rclpy import in the core driver process
-  3. A separate ROS2 bridge node reads IQ from `hackrf:iq:stream` Redis Stream and publishes to `/hackrf/iq` — existing ROS2 subscribers work unchanged
-  4. All 68 existing unit tests pass after the refactor (no regression)
-**Plans**: 5 plans
-
-Plans:
-- [x] 05-01-PLAN.md — Extract pymayhem package: _serial.py, domain modules, MayhemClient, UnsafeMayhemClient, pyproject.toml, 12 tests (REF-01, REF-02, REF-03)
-- [x] 05-02-PLAN.md — hackrf_driver scaffold: config.py, move RedisBridge + TXController, decouple TXController from node ref, 36 tests (REF-04, REF-07)
-- [x] 05-03-PLAN.md — HackRFDriver main loop: driver.py, cli.py, __main__.py, threading replaces ROS2 timers (REF-04)
-- [x] 05-04-PLAN.md — ROS2 bridge node: bridge_node.py reads Redis Pub/Sub, publishes /hackrf/iq and /hackrf/state (REF-05, REF-06)
-- [x] 05-05-PLAN.md — Test migration: update test/ imports to new package homes, full 68-test regression check (REF-07)
-
-### Phase 6: Foundation Hardening
-**Goal**: All error paths raise typed exceptions with clear semantics, all inputs are validated before touching hardware, the Redis bridge survives a Redis restart, every IQ entry carries a sequence number for gap detection, TX can be dry-run validated without emitting RF, and the antenna confirmation is reachable from ROS2
-**Depends on**: Phase 5
-**Requirements**: ERR-01, ERR-02, ERR-03, ERR-04, ERR-05, REL-02, REL-03, TXS-01, TXS-02, TXS-03, LEG-01
-**Success Criteria** (what must be TRUE):
-  1. A pymayhem command failure raises a `MayhemError` subclass that a caller can catch by type — no silent bool returns for error conditions
-  2. Passing an out-of-range parameter to hackrf_driver raises `HackRFConfigError` before any hardware state changes
-  3. Restarting Redis while the driver is running causes BridgeNode to reconnect automatically and resume publishing `/hackrf/iq` within the backoff window — the topic does not go permanently silent
-  4. Every entry in `hackrf:iq:stream` contains a `seq` field; a consumer reading two consecutive entries can detect any dropped buffer by checking for gaps in the sequence number
-  5. Calling `validate_tx()` with a valid auth token returns True without consuming the token — a subsequent real TX can still use the same token
-  6. A ROS2 service call to `/hackrf/confirm_antenna` sets the Redis antenna confirmation key and is acknowledged before any TX is attempted
-**Plans**: 4 plans
-
-Plans:
-- [x] 06-01-PLAN.md — Exception hierarchies for pymayhem and hackrf_driver; domain method conversion to raise-on-error (ERR-01, ERR-02, ERR-03)
-- [ ] 06-02-PLAN.md — _update_param raises HackRFConfigError; _dispatch_command exception boundary; IQ sequence numbers (ERR-04, ERR-05, REL-03)
-- [x] 06-03-PLAN.md — BridgeNode reconnect loop; antenna confirmation service; legacy deprecation (REL-02, TXS-02, LEG-01)
-- [ ] 06-04-PLAN.md — validate_tx() dry-run method; periodic antenna re-read timer (TXS-01, TXS-03)
-
-### Phase 7: Observability & Reliability
-**Goal**: Operators can observe live driver health through Redis metrics, failed commands are preserved for forensic review, and the driver self-heals from USB stalls without manual intervention
-**Depends on**: Phase 6
-**Requirements**: REL-01, OBS-01, OBS-02, OBS-03
-**Success Criteria** (what must be TRUE):
-  1. `hackrf:metrics` hash updates at 1 Hz with current IQ throughput, error counts, queue depths, and uptime — readable from any Redis client without touching ROS2
-  2. A command that fails dispatch (e.g., bad frequency, missing auth) appears in `hackrf:cmd:dlq` with its error context and timestamp, and the DLQ does not grow beyond 500 entries
-  3. If the HackRF produces no IQ data for 10 seconds (simulated by blocking the USB path), the watchdog triggers reconnection and IQ flow resumes — all without deadlocking `_device_lock`
-  4. `/hackrf/metrics` ROS2 topic publishes the same data as `hackrf:metrics` hash — a ROS2 subscriber can observe driver health without a Redis client
-**Plans**: 2 plans
-
-Plans:
-- [ ] 07-01-PLAN.md — Watchdog thread, metrics accumulator, dead-letter queue in hackrf_driver (REL-01, OBS-01, OBS-02)
-- [ ] 07-02-PLAN.md — BridgeNode /hackrf/metrics ROS2 topic (OBS-03)
-
-### Phase 8: Signal Capabilities
-**Goal**: The driver can record IQ to standards-compliant SigMF files, publish real-time power spectra to Redis and ROS2, and execute programmable frequency hopping sequences
-**Depends on**: Phase 6
-**Requirements**: REC-01, REC-02, REC-03, REC-04, FFT-01, FFT-02, FFT-03, FFT-04, HOP-01, HOP-02, HOP-03, HOP-04
-**Success Criteria** (what must be TRUE):
-  1. A `record_start` Redis command begins writing IQ to a `.sigmf-data` + `.sigmf-meta` file pair; `record_stop` closes the file with correct SigMF metadata (datatype, sample_rate, frequency, datetime) — the resulting file opens in GNU Radio or inspectrum without errors
-  2. Sequence number gaps during recording appear as separate `captures` entries in the SigMF metadata with correct `sample_start` offsets — no samples are silently omitted or misattributed
-  3. `hackrf:spectrum` stream updates at configurable rate (default 10 Hz, up to 50 Hz) with float32 PSD bins; `hackrf:waterfall` list maintains a rolling 200-row history
-  4. `/hackrf/spectrum` ROS2 topic publishes spectrum data matching `hackrf:spectrum` — existing ROS2 visualization nodes can subscribe without Redis
-  5. A `hop_start` Redis command with a frequency list and dwell time begins scanning; the hop scheduler never advances while TX is active; `hop_stop` halts scanning and holds the current frequency; current hop state is visible in `hackrf:state`
+  1. A subscriber to `/hackrf/spectrum` receives `SpectrumStamped` messages with valid `header.stamp` and `header.frame_id` matching the configured antenna frame
+  2. `ros2 run tf2_tools view_frames` shows a static `base_link -> hackrf_antenna` transform in the TF tree
+  3. A subscriber to `/hackrf/detections` receives `RFDetectionArray` messages where each detection carries centroid frequency, 3 dB bandwidth, integrated power, SNR, and a band label (e.g., WiFi, BLE, ZigBee, LTE, ISM, unknown)
+  4. Detections on `/hackrf/detections` have stable IDs across consecutive frames — the same emitter receives the same ID until it disappears
+  5. PSD publishing sustains 10 Hz on the Jetson ARM64 target (measured via `ros2 topic hz /hackrf/spectrum`)
 **Plans**: TBD
-**UI hint**: yes
+**UI hint**: no
+
+### Phase 2: Robot Autonomy Integration
+**Goal**: A robot autonomy stack can trigger wideband sweeps, record IQ files with pose metadata, and consume an RF occupancy grid for navigation
+**Depends on**: Phase 1
+**Requirements**: SWP-01, SWP-02, SWP-03, REC-01, REC-02, REC-03, REC-04, MAP-01, MAP-02, MAP-03
+**Success Criteria** (what must be TRUE):
+  1. Calling the sweep action server returns per-hop progress feedback and a stitched composite PSD; sending a cancel goal aborts the sweep and restores the original center frequency
+  2. Calling the IQ recording action server produces a valid SigMF file pair (`.sigmf-data` + `.sigmf-meta`) containing robot pose from TF at capture start and all SDR parameters
+  3. IQ recording does not drop samples under sustained write load — the bounded write-thread queue absorbs disk stalls without blocking the ROS executor
+  4. A nav_msgs/OccupancyGrid topic is published with RF power observations spatially integrated by grid cell, at a configurable resolution and update rate
+**Plans**: TBD
+**UI hint**: no
+
+### Phase 3: Reliability
+**Goal**: The driver self-corrects gain, never blocks the executor on parameter changes, and surfaces USB hardware faults through diagnostics
+**Depends on**: Phase 2
+**Requirements**: REL-01, REL-02, REL-03
+**Success Criteria** (what must be TRUE):
+  1. When ADC clip rate exceeds threshold, LNA/VGA gains are automatically reduced within one feedback cycle — observable via the `/diagnostics` topic showing gain adjustment events
+  2. A `ros2 param set` command on a streaming node completes in under 100 ms and does not stall PSD publishing (verifiable via `ros2 topic hz` remaining stable during the set)
+  3. Physically unplugging the HackRF while streaming causes the `/diagnostics` topic to transition to WARN then ERROR state within 2 seconds, without crashing the node
+**Plans**: TBD
+**UI hint**: no
+
+### Phase 4: Advanced Signal Intelligence
+**Goal**: The system detects RF environment anomalies, estimates emitter positions, disambiguates co-channel signals, and supports multiple simultaneous SDR instances
+**Depends on**: Phase 3
+**Requirements**: ADV-01, ADV-02, ADV-03, HW-01, HW-02
+**Success Criteria** (what must be TRUE):
+  1. A new strong signal appearing in a frequency band that was idle in the learned baseline causes an anomaly flag on the detections topic within one update cycle
+  2. After collecting power measurements at three or more distinct robot poses, the emitter localization node publishes a `PoseWithCovarianceStamped` estimate at the RF source's approximate location
+  3. In a 2.4 GHz ISM environment with simultaneous WiFi and BLE transmitters, cyclostationary feature extraction correctly labels each detection with the appropriate modulation class
+  4. Two HackRF instances launched under `/hackrf_0/*` and `/hackrf_1/*` namespaces publish independent `SpectrumStamped` streams without topic collision
+**Plans**: TBD
+**UI hint**: no
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
+Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. RX Pipeline Correctness | 3/3 | Complete | 2026-03-30 |
-| 2. Mayhem Serial Interface | 3/3 | Complete | 2026-03-30 |
-| 3. Redis Bridge | 2/2 | Complete | 2026-03-30 |
-| 4. TX Authorization | 2/2 | Complete | 2026-03-30 |
-| 5. PyMayhem Refactor | 5/5 | Complete | 2026-03-30 |
-| 6. Foundation Hardening | 2/4 | In Progress|  |
-| 7. Observability & Reliability | 0/2 | Not started | - |
-| 8. Signal Capabilities | 0/TBD | Not started | - |
+| 1. Sensor Foundations | 0/? | Not started | - |
+| 2. Robot Autonomy Integration | 0/? | Not started | - |
+| 3. Reliability | 0/? | Not started | - |
+| 4. Advanced Signal Intelligence | 0/? | Not started | - |

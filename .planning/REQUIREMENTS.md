@@ -89,46 +89,52 @@
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| MSG-01 | Phase 1 | Pending |
-| MSG-02 | Phase 1 | Pending |
-| MSG-03 | Phase 1 | Pending |
-| MSG-04 | Phase 1 | Pending |
-| MSG-05 | Phase 1 | Pending |
-| MSG-06 | Phase 1 | Pending |
-| DET-01 | Phase 1 | Pending |
-| DET-02 | Phase 1 | Pending |
-| DET-03 | Phase 1 | Pending |
-| DET-04 | Phase 1 | Pending |
-| DET-05 | Phase 1 | Pending |
-| DET-06 | Phase 1 | Pending |
-| PERF-01 | Phase 1 | Pending |
-| PERF-02 | Phase 1 | Pending |
-| SWP-01 | Phase 2 | Pending |
-| SWP-02 | Phase 2 | Pending |
-| SWP-03 | Phase 2 | Pending |
-| REC-01 | Phase 2 | Pending |
-| REC-02 | Phase 2 | Pending |
-| REC-03 | Phase 2 | Pending |
-| REC-04 | Phase 2 | Pending |
-| MAP-01 | Phase 2 | Pending |
-| MAP-02 | Phase 2 | Pending |
-| MAP-03 | Phase 2 | Pending |
-| REL-01 | Phase 3 | Pending |
-| REL-02 | Phase 3 | Pending |
-| REL-03 | Phase 3 | Pending |
-| ADV-01 | Phase 4 | Pending |
-| ADV-02 | Phase 4 | Pending |
-| ADV-03 | Phase 4 | Pending |
-| HW-01 | Phase 4 | Pending |
-| HW-02 | Phase 4 | Pending |
+| Requirement | Phase | Phase Name | Status |
+|-------------|-------|------------|--------|
+| MSG-01 | Phase 1 | Sensor Foundations | Pending |
+| MSG-02 | Phase 1 | Sensor Foundations | Pending |
+| MSG-03 | Phase 1 | Sensor Foundations | Pending |
+| MSG-04 | Phase 1 | Sensor Foundations | Pending |
+| MSG-05 | Phase 1 | Sensor Foundations | Pending |
+| MSG-06 | Phase 1 | Sensor Foundations | Pending |
+| DET-01 | Phase 1 | Sensor Foundations | Pending |
+| DET-02 | Phase 1 | Sensor Foundations | Pending |
+| DET-03 | Phase 1 | Sensor Foundations | Pending |
+| DET-04 | Phase 1 | Sensor Foundations | Pending |
+| DET-05 | Phase 1 | Sensor Foundations | Pending |
+| DET-06 | Phase 1 | Sensor Foundations | Pending |
+| PERF-01 | Phase 1 | Sensor Foundations | Pending |
+| PERF-02 | Phase 1 | Sensor Foundations | Pending |
+| SWP-01 | Phase 2 | Robot Autonomy Integration | Pending |
+| SWP-02 | Phase 2 | Robot Autonomy Integration | Pending |
+| SWP-03 | Phase 2 | Robot Autonomy Integration | Pending |
+| REC-01 | Phase 2 | Robot Autonomy Integration | Pending |
+| REC-02 | Phase 2 | Robot Autonomy Integration | Pending |
+| REC-03 | Phase 2 | Robot Autonomy Integration | Pending |
+| REC-04 | Phase 2 | Robot Autonomy Integration | Pending |
+| MAP-01 | Phase 2 | Robot Autonomy Integration | Pending |
+| MAP-02 | Phase 2 | Robot Autonomy Integration | Pending |
+| MAP-03 | Phase 2 | Robot Autonomy Integration | Pending |
+| REL-01 | Phase 3 | Reliability | Pending |
+| REL-02 | Phase 3 | Reliability | Pending |
+| REL-03 | Phase 3 | Reliability | Pending |
+| ADV-01 | Phase 4 | Advanced Signal Intelligence | Pending |
+| ADV-02 | Phase 4 | Advanced Signal Intelligence | Pending |
+| ADV-03 | Phase 4 | Advanced Signal Intelligence | Pending |
+| HW-01 | Phase 4 | Advanced Signal Intelligence | Pending |
+| HW-02 | Phase 4 | Advanced Signal Intelligence | Pending |
 
 **Coverage:**
 - v1 requirements: 32 total
 - Mapped to phases: 32
 - Unmapped: 0
 
+**Phase distribution:**
+- Phase 1 (Sensor Foundations): 14 requirements (MSG-01..06, DET-01..06, PERF-01..02)
+- Phase 2 (Robot Autonomy Integration): 10 requirements (SWP-01..03, REC-01..04, MAP-01..03)
+- Phase 3 (Reliability): 3 requirements (REL-01..03)
+- Phase 4 (Advanced Signal Intelligence): 5 requirements (ADV-01..03, HW-01..02)
+
 ---
 *Requirements defined: 2026-04-13*
-*Last updated: 2026-04-13 after initial definition*
+*Last updated: 2026-04-13 after roadmap creation — traceability finalized*
