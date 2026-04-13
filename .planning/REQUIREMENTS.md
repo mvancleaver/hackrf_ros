@@ -57,7 +57,7 @@
 
 - [ ] **ADV-01**: Wideband anomaly detection flags deviations from learned baseline PSD per frequency
 - [ ] **ADV-02**: Multi-observation emitter localization estimates emitter position from power measurements at multiple robot poses
-- [ ] **ADV-03**: Cyclostationary feature extraction disambiguates WiFi vs BLE vs ZigBee in 2.4 GHz ISM band
+- [x] **ADV-03**: Cyclostationary feature extraction disambiguates WiFi vs BLE vs ZigBee in 2.4 GHz ISM band
 
 ### Hardware Expansion
 

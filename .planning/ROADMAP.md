@@ -80,10 +80,10 @@ Plans:
   4. Two HackRF instances launched under `/hackrf_0/*` and `/hackrf_1/*` namespaces publish independent `SpectrumStamped` streams without topic collision
 **Plans**: 4 plans
 Plans:
-- [ ] 04-01-PLAN.md — Message schema extensions (RFDetection +4 fields, RFEmitterEstimate, RFEmitterMap) + device_index param + multi_radio.launch.py
-- [ ] 04-02-PLAN.md — Anomaly detection in cfar_node: AnomalyDetector class, EMA baseline, dual trigger, diagnostics (ADV-01)
+- [x] 04-01-PLAN.md — Message schema extensions (RFDetection +4 fields, RFEmitterEstimate, RFEmitterMap) + device_index param + multi_radio.launch.py
+- [x] 04-02-PLAN.md — Anomaly detection in cfar_node: AnomalyDetector class, EMA baseline, dual trigger, diagnostics (ADV-01)
 - [ ] 04-03-PLAN.md — Emitter localization node: Nelder-Mead RSSI fit, collinearity rejection, RFEmitterMap publisher (ADV-02)
-- [ ] 04-04-PLAN.md — Cyclostationary feature node: WiFi/BLE/ZigBee classifier, /hackrf/cyclo_detections publisher (ADV-03)
+- [x] 04-04-PLAN.md — Cyclostationary feature node: WiFi/BLE/ZigBee classifier, /hackrf/cyclo_detections publisher (ADV-03)
 **UI hint**: no
 
 ## Progress
@@ -96,4 +96,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Sensor Foundations | 1/4 | In progress | - |
 | 2. Robot Autonomy Integration | 1/4 | In Progress|  |
 | 3. Reliability | 3/3 | Complete   | 2026-04-13 |
-| 4. Advanced Signal Intelligence | 0/4 | Not started | - |
+| 4. Advanced Signal Intelligence | 3/4 | In Progress|  |
