@@ -66,6 +66,8 @@ AGC_CLIP_WINDOW = 5    # clips within this many cycles triggers gain reduction
 AGC_LNA_STEP = 8       # dB — HackRF LNA steps in 8 dB increments
 AGC_VGA_STEP = 4       # dB — reduce VGA by 4 dB (2 dB minimum step x2)
 
+DISCONNECT_ERROR_TIMEOUT = 2.0   # seconds before USB fault escalates WARN -> ERROR
+
 
 class HackRFLifecycleNode(LifecycleNode):
     """ROS2 lifecycle node for HackRF One SDR."""
@@ -91,6 +93,10 @@ class HackRFLifecycleNode(LifecycleNode):
         self._agc_clip_snapshot: int = 0   # _clip_count value at last AGC check
         self._agc_cycle_counter: int = 0   # publish cycles since last AGC fire
         self._agc_last_action: str = 'none'
+
+        # USB disconnect state (REL-03)
+        self._usb_fault: bool = False
+        self._usb_fault_time: float = 0.0
 
         # Recorder fan-out queue — None when not recording (per D-09, D-10)
         self._recorder_q: queue.Queue | None = None
@@ -355,6 +361,7 @@ class HackRFLifecycleNode(LifecycleNode):
                         self._is_streaming = False
                     except (RuntimeError, OSError) as e:
                         self.get_logger().warning(f'stop_rx for retune: {e}')
+                        self._handle_usb_fault('param_worker:stop_rx')
                 if self._hackrf is not None:
                     self._apply_pending(pending)
                 if needs_restart and not self._is_streaming and self._hackrf is not None:
@@ -369,6 +376,7 @@ class HackRFLifecycleNode(LifecycleNode):
                             if attempt == 2:
                                 self.get_logger().error(
                                     f'start_rx after retune failed: {e}')
+                                self._handle_usb_fault('param_worker:start_rx')
             # Reset PSD accumulator after any param change
             self._psd_accum[:] = 0
             self._accum_count = 0
@@ -403,47 +411,52 @@ class HackRFLifecycleNode(LifecycleNode):
     # ------------------------------------------------------------------
 
     def _rx_callback(self, data: bytes) -> bool:
-        self._last_rx_time = time.monotonic()
-        chunk = bytes(data)
-
-        # ADC clipping detection — discard frames with >0.5% at rails
-        arr = np.frombuffer(chunk, dtype=np.int8)
-        if np.count_nonzero(np.abs(arr) >= 127) > len(arr) * ADC_CLIP_THRESHOLD:
-            self._clip_count += 1
-            return False  # drop clipped frame
-
+        """USB thread callback — must not raise (pyhackrf2 C thread). (REL-03)"""
         try:
-            self._iq_queue.put_nowait(chunk)
-        except queue.Full:
-            try:
-                self._iq_queue.get_nowait()
-            except queue.Empty:
-                pass
+            self._last_rx_time = time.monotonic()
+            chunk = bytes(data)
+
+            # ADC clipping detection — discard frames with >0.5% at rails
+            arr = np.frombuffer(chunk, dtype=np.int8)
+            if np.count_nonzero(np.abs(arr) >= 127) > len(arr) * ADC_CLIP_THRESHOLD:
+                self._clip_count += 1
+                return False  # drop clipped frame
+
             try:
                 self._iq_queue.put_nowait(chunk)
             except queue.Full:
-                pass
-            self._rx_overflow_count += 1
-
-        # Recorder fan-out (D-09, D-10): put_nowait; drop-oldest on full
-        rq = self._recorder_q  # snapshot ref under CPython GIL
-        if rq is not None:
-            try:
-                rq.put_nowait(chunk)
-            except queue.Full:
                 try:
-                    rq.get_nowait()  # drop oldest
+                    self._iq_queue.get_nowait()
                 except queue.Empty:
                     pass
                 try:
-                    rq.put_nowait(chunk)
+                    self._iq_queue.put_nowait(chunk)
                 except queue.Full:
                     pass
-                self._recorder_q_drops += 1
-                self.get_logger().warning(
-                    'Recorder queue full — dropped oldest IQ chunk')
+                self._rx_overflow_count += 1
 
-        return False
+            # Recorder fan-out (D-09, D-10): put_nowait; drop-oldest on full
+            rq = self._recorder_q  # snapshot ref under CPython GIL
+            if rq is not None:
+                try:
+                    rq.put_nowait(chunk)
+                except queue.Full:
+                    try:
+                        rq.get_nowait()  # drop oldest
+                    except queue.Empty:
+                        pass
+                    try:
+                        rq.put_nowait(chunk)
+                    except queue.Full:
+                        pass
+                    self._recorder_q_drops += 1
+                    self.get_logger().warning(
+                        'Recorder queue full — dropped oldest IQ chunk')
+
+            return False
+        except (RuntimeError, OSError):
+            self._handle_usb_fault('rx_callback')
+            return False
 
     def _flush_queue(self):
         while not self._iq_queue.empty():
@@ -451,6 +464,18 @@ class HackRFLifecycleNode(LifecycleNode):
                 self._iq_queue.get_nowait()
             except queue.Empty:
                 break
+
+    def _handle_usb_fault(self, source: str) -> None:
+        """Record USB disconnect event and stop streaming state (REL-03).
+
+        Called from _rx_callback USB thread or _param_worker thread.
+        Sets _usb_fault so diagnostics escalates to WARN then ERROR.
+        """
+        self._usb_fault = True
+        self._usb_fault_time = time.monotonic()
+        self._is_streaming = False
+        self.get_logger().error(
+            f'USB fault detected in {source} — HackRF may be disconnected')
 
     def _agc_tick(self) -> None:
         """Check ADC clip rate and reduce gain if needed (REL-01).
@@ -730,13 +755,26 @@ class HackRFLifecycleNode(LifecycleNode):
     # ------------------------------------------------------------------
 
     def _diagnostics_callback(self, stat):
+        now = time.monotonic()
+        # USB disconnect escalation (REL-03)
+        if self._usb_fault:
+            fault_age = now - self._usb_fault_time
+            if fault_age < DISCONNECT_ERROR_TIMEOUT:
+                stat.summary(DiagnosticStatus.WARN, 'USB disconnect detected')
+            else:
+                stat.summary(DiagnosticStatus.ERROR, 'USB device lost')
+            stat.add('usb_fault', 'true')
+            stat.add('usb_fault_age_s', f'{fault_age:.1f}')
+            return stat
+
+        # Normal status path
         connected = self._hackrf is not None
         streaming = self._is_streaming
         if not connected:
             stat.summary(DiagnosticStatus.ERROR, 'Device not connected')
         elif not streaming:
             stat.summary(DiagnosticStatus.WARN, 'Not streaming')
-        elif (time.monotonic() - self._last_rx_time) > 10.0:
+        elif (now - self._last_rx_time) > 10.0:
             stat.summary(DiagnosticStatus.WARN, 'IQ stall detected')
         else:
             stat.summary(DiagnosticStatus.OK, 'Streaming')
@@ -749,10 +787,10 @@ class HackRFLifecycleNode(LifecycleNode):
                      str(self.get_parameter('sample_rate').value))
         stat.add('rx_overflows', str(self._rx_overflow_count))
         stat.add('adc_clips', str(self._clip_count))
+        stat.add('usb_fault', str(self._usb_fault).lower())
         stat.add('agc_last_action', self._agc_last_action)
         if self._activate_time is not None:
-            stat.add('uptime_s',
-                     f'{time.monotonic() - self._activate_time:.1f}')
+            stat.add('uptime_s', f'{now - self._activate_time:.1f}')
         return stat
 
     def _handle_recording_start(self, request, response):
