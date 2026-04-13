@@ -64,10 +64,11 @@ def generate_launch_description():
             'pfa': 1e-4,
             'guard_cells': 8,
             'train_cells': 32,
+            'averaging_depth': 16,
             'persistence_n': 3,
             'persistence_decay': 5,
             'anomaly_alpha': 0.05,
-            'anomaly_threshold_db': 10.0,
+            'anomaly_spike_threshold_db': 10.0,
             'anomaly_warmup_s': 30.0,
         }],
     )
@@ -82,7 +83,6 @@ def generate_launch_description():
             'min_observations': 3,
             'min_separation_m': 0.5,
             'silence_timeout_s': 10.0,
-            'publish_rate': 1.0,
         }],
     )
 

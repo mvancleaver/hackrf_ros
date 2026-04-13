@@ -5,7 +5,8 @@ groups adjacent bins into signal clusters, applies persistence tracking and band
 classification, publishes RFDetectionArray and RFEnvironment.
 
 References:
-    - Holik eq 11.39: T_m = M * (Pfa^(-1/M) - 1)
+    - Holik eq 11.39: T_m = M * (Pfa^(-1/M) - 1) [single-frame PSD]
+    - Beta-distribution CDF inversion for averaged PSD (avg_depth > 1)
     - scipy.ndimage.convolve1d for sliding noise estimate
     - scipy.ndimage.label for connected-component bin grouping
 """
@@ -15,6 +16,7 @@ import time
 
 import numpy as np
 from scipy.ndimage import convolve1d, label as ndimage_label
+from scipy.stats import beta as _beta_dist
 
 import rclpy
 from rclpy.node import Node
@@ -30,6 +32,40 @@ from hackrf_interfaces.msg import (
 # Band classification lookup table (D-10, D-11, DET-05, DET-06)
 # (freq_lo_hz, freq_hi_hz, bw_min_hz, bw_max_hz, label)
 # Entries are checked in order; first match wins.  None = wildcard.
+# ---------------------------------------------------------------------------
+def _cfar_threshold_multiplier(pfa: float, n_train: int, avg_depth: int = 1) -> float:
+    """Compute CA-CFAR threshold multiplier T_m accounting for PSD averaging.
+
+    For avg_depth=1: Holik closed-form T_m = M*(pfa^(-1/M)-1) (exact for
+    i.i.d. exponential reference cells from single-frame PSD).
+
+    For avg_depth>1: numerically inverts the Beta(L, M*L) CDF where L=avg_depth.
+    With L-frame averaging the noise estimate has lower variance, requiring a
+    smaller T_m to achieve the same Pfa. Using the single-frame formula on
+    averaged PSD over-estimates the threshold and misses weak signals (H-RF-1).
+
+    Args:
+        pfa: Target probability of false alarm.
+        n_train: Number of training cells per side * 2 (total reference cells M).
+        avg_depth: Number of independent PSD frames averaged by the driver.
+
+    Returns:
+        Threshold multiplier T_m such that psd_lin > T_m * mu_noise → detection.
+    """
+    if avg_depth <= 1:
+        return float(n_train * (pfa ** (-1.0 / n_train) - 1.0))
+
+    L, M = int(avg_depth), int(n_train)
+    # Pfa = P(Beta(L, M*L) > T/(T+M)) = 1 - I(T/(T+M), L, M*L)
+    # Solve: T/(T+M) = beta.ppf(1 - pfa, L, M*L)
+    x = float(_beta_dist.ppf(1.0 - pfa, L, M * L))
+    if x >= 1.0:
+        return float('inf')
+    return float(M * x / (1.0 - x))
+
+
+# ---------------------------------------------------------------------------
+# Band classification lookup table (D-10, D-11, DET-05, DET-06)
 # ---------------------------------------------------------------------------
 _BAND_TABLE: list[tuple[float, float, float | None, float | None, str]] = [
     # FM broadcast
@@ -89,6 +125,7 @@ class AnomalyDetector:
         self._spike_threshold_db = float(spike_threshold_db)
         self._baseline: np.ndarray | None = None
         self._warmup_accum: list[np.ndarray] = []
+        self._warmup_max_frames: int = 300  # cap at 300 frames (~30 s at 10 Hz)
         self._has_ever_detected: np.ndarray = np.zeros(n_bins, dtype=bool)
         self._start_time: float = time.monotonic()
         self._n_bins: int = n_bins
@@ -113,7 +150,8 @@ class AnomalyDetector:
 
         now = time.monotonic()
         if now - self._start_time < self._warmup_s:
-            self._warmup_accum.append(psd_db.astype(np.float32))
+            if len(self._warmup_accum) < self._warmup_max_frames:
+                self._warmup_accum.append(psd_db.astype(np.float32))
             return zeros, zeros
 
         # Transition: seed baseline from warmup median (one-shot)
@@ -163,6 +201,10 @@ class CFARNode(Node):
         self.declare_parameter('persistence_n', 3)
         self.declare_parameter('persistence_decay', 5)
         self.declare_parameter('antenna_frame', 'hackrf_antenna')
+        # averaging_depth must match PSD_AVERAGING in hackrf_lifecycle_node.py (default 16).
+        # Using the correct value ensures the CFAR threshold accounts for the
+        # reduced noise variance from L-frame averaging (H-RF-1 fix).
+        self.declare_parameter('averaging_depth', 16)
 
         # Cache params
         self._pfa: float = self.get_parameter('pfa').value
@@ -184,7 +226,7 @@ class CFARNode(Node):
         qos_reliable = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
+            depth=10,  # depth=1 caused backpressure on slow downstream subscribers
         )
 
         # ---- Subscription ----
@@ -237,14 +279,17 @@ class CFARNode(Node):
         guard: int,
         train: int,
         pfa: float,
+        avg_depth: int = 1,
     ) -> np.ndarray:
-        """Cell-averaging CFAR detector.
+        """Cell-averaging CFAR detector with averaging-depth correction.
 
         Args:
             psd_db: Power spectral density in dB (1-D float64 array).
             guard: Number of guard cells on each side of CUT.
             train: Number of training (reference) cells on each side.
             pfa: Probability of false alarm.
+            avg_depth: Number of PSD frames averaged by the driver (default 1).
+                       Set to match PSD_AVERAGING in hackrf_lifecycle_node.py.
 
         Returns:
             Boolean mask of detected bins (same length as psd_db).
@@ -264,11 +309,12 @@ class CFARNode(Node):
         m_total = 2 * train  # M — total reference cells
         kernel /= m_total
 
-        # Sliding noise estimate
+        # Sliding noise estimate (mode='nearest' pads with edge value)
         mu = convolve1d(psd_lin, kernel, mode='nearest')
 
-        # Threshold multiplier — Holik eq 11.39
-        T_m = m_total * (pfa ** (-1.0 / m_total) - 1.0)
+        # Threshold multiplier — exact Beta-CDF inversion for avg_depth > 1,
+        # Holik closed-form for avg_depth == 1.
+        T_m = _cfar_threshold_multiplier(pfa, m_total, avg_depth)
 
         return psd_lin > (T_m * mu)
 
@@ -451,8 +497,9 @@ class CFARNode(Node):
             )
             return
 
-        # Pass 1: CA-CFAR
-        mask = self._ca_cfar(psd_db, self._guard, self._train, self._pfa)
+        # Pass 1: CA-CFAR with averaging-depth correction (H-RF-1 fix)
+        avg_depth = int(self.get_parameter('averaging_depth').value)
+        mask = self._ca_cfar(psd_db, self._guard, self._train, self._pfa, avg_depth)
 
         # Group detected bins into signal clusters
         raw_dets = self._group_detections(
@@ -564,13 +611,17 @@ class CFARNode(Node):
 
 def main(args=None):
     """Entry point for cfar_node."""
+    from rclpy.executors import MultiThreadedExecutor
     rclpy.init(args=args)
     node = CFARNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
 

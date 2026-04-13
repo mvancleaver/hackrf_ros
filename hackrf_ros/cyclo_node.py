@@ -54,9 +54,11 @@ _BLE_WINDOW_SAMPLES = 12500        # 625 us * 20 MHz = 12500 samples per BLE dwe
 # Pilot subcarriers at ±7 and ±21 relative to DC, spacing = 312.5 kHz
 # Bin index = subcarrier_number * (312500 Hz / _BIN_HZ)
 #           = subcarrier_number * 64
-# Subcarrier 7  -> bin 448
-# Subcarrier 21 -> bin 1344
-_WIFI_PILOT_BINS = [448, 1344]
+# Positive subcarriers: 7 -> bin 448,  21 -> bin 1344
+# Negative subcarriers: -7 -> bin 4096-448=3648,  -21 -> bin 4096-1344=2752
+# Checking all four bins recovers ~3 dB of detection sensitivity that was
+# lost by ignoring the negative subcarriers (H-RF-2 fix).
+_WIFI_PILOT_BINS = [448, 1344, 2752, 3648]
 
 # 2.4 GHz ISM band boundaries (per _BAND_TABLE in cfar_node.py)
 _ISM_2400_LO = 2_400_000_000.0
@@ -127,7 +129,9 @@ def cyclo_classify(iq_chunk: np.ndarray) -> tuple[str, float]:
     # Note: BLE hop windows use noise-like IQ so SFM is high (flat spectrum) —
     # do NOT guard on sfm here. power_cv alone discriminates BLE from ZigBee
     # (ZigBee/DSSS has constant power: cv ~0.004, BLE has cv > 0.8 when hopping).
-    if power_cv > 0.3:
+    # Threshold raised from 0.3 to 0.45 to reduce false BLE classifications from
+    # bursty WiFi traffic (M-RF-2 fix).
+    if power_cv > 0.45:
         confidence = min(1.0, float(power_cv) * 2.0)
         return 'ble', confidence
 

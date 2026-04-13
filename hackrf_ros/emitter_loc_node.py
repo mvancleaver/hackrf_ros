@@ -140,7 +140,7 @@ def _estimate_emitter(
 
     best_result = None
     for xe0, ye0 in candidate_positions:
-        for n_init in [2.0, 2.5]:
+        for n_init in [2.0, 2.5, 3.0]:
             x0 = [xe0, ye0, rssi_max, n_init]
             res = minimize(
                 cost,
@@ -167,10 +167,22 @@ def _estimate_emitter(
     if best_result.fun > 100.0 * n_obs:
         return None
 
-    # Diagonal position covariance from normalized residual variance
-    sigma2 = best_result.fun / max(n_obs - 2, 1)
-    cov_xx = float(sigma2)
-    cov_yy = float(sigma2)
+    # Position covariance via Cramér-Rao approximation for RSSI-based positioning.
+    # sigma_pos ~ (ln(10)/10) * (sigma_rssi_db / n_path_loss) * d_mean
+    # This propagates RSSI uncertainty through the log-distance path loss Jacobian
+    # to give position uncertainty in m² (the correct units for a covariance field).
+    # Previously sigma2 was in dB² which is dimensionally incorrect for m².
+    import math as _math
+    sigma_rssi_db = _math.sqrt(max(best_result.fun / max(n_obs - 2, 1), 1e-10))
+    ln10_over_10 = _math.log(10.0) / 10.0  # ≈ 0.2303
+    dists = [
+        max(_math.sqrt((ox - xe) ** 2 + (oy - ye) ** 2), 0.1)
+        for ox, oy, _ in observations
+    ]
+    d_mean = float(np.mean(dists))
+    cov_pos = (ln10_over_10 * sigma_rssi_db / n * d_mean) ** 2
+    cov_xx = float(cov_pos)
+    cov_yy = float(cov_pos)
 
     return float(xe), float(ye), float(rssi0), float(n), cov_xx, cov_yy
 
@@ -244,10 +256,14 @@ class EmitterLocNode(Node):
 
         # Look up robot pose in map frame at detection time
         try:
+            # Non-blocking lookup (timeout=0): drop the detection immediately if
+            # TF is not yet available rather than blocking the executor thread.
+            # A 50 ms blocking lookup on a RELIABLE callback wastes an executor
+            # thread slot during TF initialization (M-ROS-7 fix).
             tf_stamped = self._tf_buffer.lookup_transform(
                 map_frame, robot_frame,
-                rclpy.time.Time(),  # latest available
-                timeout=rclpy.duration.Duration(seconds=0.05),
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0),
             )
         except (LookupException, ExtrapolationException) as e:
             self.get_logger().warn(f'TF lookup failed: {e}', throttle_duration_sec=30.0)

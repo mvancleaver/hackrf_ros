@@ -1,11 +1,13 @@
 """HackRF One ROS2 Lifecycle Driver Node.
 
 Published topics (when ACTIVE):
-    /hackrf/spectrum  SpectrumStamped     PSD in dB (4096 bins), ~10 Hz
-    (BEST_EFFORT QoS, depth=5)
+    /hackrf/spectrum  SpectrumStamped      PSD in dBFS (4096 bins), ~10 Hz  RELIABLE depth=5
+    /hackrf/iq        Float32MultiArray    Raw IQ float32 interleaved, ~10 Hz  BEST_EFFORT depth=1
 
 Services (when ACTIVE):
-    /hackrf/sweep    hackrf_interfaces/srv/Sweep   Sweep freq_min..freq_max, return aggregated PSD
+    /hackrf/sweep_sync  hackrf_interfaces/srv/Sweep  Blocking sweep (prefer action server)
+    /hackrf/recording/start  std_srvs/Trigger        Activate recorder fan-out queue
+    /hackrf/recording/stop   std_srvs/Trigger        Deactivate recorder fan-out queue
 
 Lifecycle:
     UNCONFIGURED -> on_configure -> INACTIVE -> on_activate -> ACTIVE
@@ -37,6 +39,7 @@ from tf2_ros import StaticTransformBroadcaster
 from diagnostic_updater import Updater
 from diagnostic_msgs.msg import DiagnosticStatus
 
+from std_msgs.msg import Float32MultiArray
 from hackrf_interfaces.msg import SpectrumStamped
 from hackrf_interfaces.srv import Sweep
 from std_srvs.srv import Trigger
@@ -61,10 +64,11 @@ USABLE_BW_FRACTION = 0.8  # 80% — matches MAX2837 analog filter rolloff
 EDGE_TRIM = int(FFT_SIZE * 0.10)  # 10% per side
 ADC_CLIP_THRESHOLD = 0.005  # discard frame if >0.5% samples clipped
 
-AGC_HOLD_FRAMES = 10   # publish cycles before AGC may fire again (hysteresis)
-AGC_CLIP_WINDOW = 5    # clips within this many cycles triggers gain reduction
-AGC_LNA_STEP = 8       # dB — HackRF LNA steps in 8 dB increments
-AGC_VGA_STEP = 4       # dB — reduce VGA by 4 dB (2 dB minimum step x2)
+AGC_HOLD_FRAMES = 10    # publish cycles before AGC may fire again (hysteresis)
+AGC_CLIP_WINDOW = 5     # clips within this many cycles triggers gain reduction
+AGC_LNA_STEP = 8        # dB — HackRF LNA steps in 8 dB increments
+AGC_VGA_STEP = 4        # dB — VGA step for gain adjustment (2 dB minimum × 2)
+AGC_QUIET_CYCLES = 30   # consecutive clip-free cycles before recovering gain
 
 DISCONNECT_ERROR_TIMEOUT = 2.0   # seconds before USB fault escalates WARN -> ERROR
 
@@ -81,7 +85,10 @@ class HackRFLifecycleNode(LifecycleNode):
         self._sweep_lock = threading.Lock()
         self._timer = None
         self._spectrum_pub = None
+        self._iq_pub = None
         self._sweep_srv = None
+        self._recording_start_srv = None
+        self._recording_stop_srv = None
         self._diag_updater = None
         self._activate_time: float | None = None
         self._last_rx_time: float = 0.0
@@ -93,6 +100,7 @@ class HackRFLifecycleNode(LifecycleNode):
         self._agc_clip_snapshot: int = 0   # _clip_count value at last AGC check
         self._agc_cycle_counter: int = 0   # publish cycles since last AGC fire
         self._agc_last_action: str = 'none'
+        self._agc_quiet_counter: int = 0   # consecutive clip-free cycles for gain recovery
 
         # USB disconnect state (REL-03)
         self._usb_fault: bool = False
@@ -101,6 +109,14 @@ class HackRFLifecycleNode(LifecycleNode):
         # Recorder fan-out queue — None when not recording (per D-09, D-10)
         self._recorder_q: queue.Queue | None = None
         self._recorder_q_drops: int = 0
+
+        # Accumulator lock — protects _psd_accum and _accum_count against
+        # concurrent access from _process_and_publish_inner (timer callback)
+        # and _param_worker (background thread).
+        self._accum_lock = threading.Lock()
+
+        # Last raw IQ bytes for /hackrf/iq publishing (updated in timer callback)
+        self._last_raw_bytes: bytes | None = None
 
         # Async parameter application — work queue + background worker (REL-02)
         self._param_queue: queue.Queue = queue.Queue(maxsize=4)
@@ -139,8 +155,20 @@ class HackRFLifecycleNode(LifecycleNode):
             history=HistoryPolicy.KEEP_LAST,
             depth=5,
         )
-        self._spectrum_pub = self.create_publisher(
+        # Use lifecycle publishers so they deactivate automatically when the
+        # node transitions to INACTIVE (lifecycle semantics require this).
+        self._spectrum_pub = self.create_lifecycle_publisher(
             SpectrumStamped, '/hackrf/spectrum', qos_stream)
+
+        # /hackrf/iq — interleaved float32 I/Q for cyclo_node and iq_recorder_node.
+        # Published at the same rate as the PSD (once per PSD_AVERAGING frames).
+        qos_iq = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self._iq_pub = self.create_lifecycle_publisher(
+            Float32MultiArray, '/hackrf/iq', qos_iq)
 
         # Static TF: parent_frame -> antenna_frame (per D-07, D-08)
         self._tf_broadcaster = StaticTransformBroadcaster(self)
@@ -154,11 +182,12 @@ class HackRFLifecycleNode(LifecycleNode):
         tf_msg.transform.rotation.w = 1.0  # identity quaternion
         self._tf_broadcaster.sendTransform(tf_msg)
 
-        # Sweep service on a reentrant callback group so it doesn't block
-        # the timer callback during long sweeps
+        # Legacy sweep service — renamed to /hackrf/sweep_sync to avoid name
+        # collision with the sweep_action_node action server at /hackrf/sweep.
+        # Prefer the action server for new code.
         srv_group = ReentrantCallbackGroup()
         self._sweep_srv = self.create_service(
-            Sweep, '/hackrf/sweep', self._handle_sweep,
+            Sweep, '/hackrf/sweep_sync', self._handle_sweep,
             callback_group=srv_group)
 
         # Recording control services (per D-10, D-18)
@@ -242,9 +271,34 @@ class HackRFLifecycleNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
+        # Stop param worker if it wasn't stopped by on_deactivate (e.g. on_error path)
+        if self._param_worker_thread is not None and self._param_worker_thread.is_alive():
+            try:
+                self._param_queue.put_nowait(None)
+            except queue.Full:
+                pass
+            self._param_worker_thread.join(timeout=2.0)
+            self._param_worker_thread = None
+
         self._close_device()
-        self._spectrum_pub = None
-        self._sweep_srv = None
+
+        # Destroy publishers and services explicitly — required for clean re-configure.
+        # Setting references to None without destroying leaks DDS handles.
+        if self._spectrum_pub is not None:
+            self.destroy_publisher(self._spectrum_pub)
+            self._spectrum_pub = None
+        if self._iq_pub is not None:
+            self.destroy_publisher(self._iq_pub)
+            self._iq_pub = None
+        if self._sweep_srv is not None:
+            self.destroy_service(self._sweep_srv)
+            self._sweep_srv = None
+        if hasattr(self, '_recording_start_srv') and self._recording_start_srv is not None:
+            self.destroy_service(self._recording_start_srv)
+            self._recording_start_srv = None
+        if hasattr(self, '_recording_stop_srv') and self._recording_stop_srv is not None:
+            self.destroy_service(self._recording_stop_srv)
+            self._recording_stop_srv = None
         self._diag_updater = None
         return TransitionCallbackReturn.SUCCESS
 
@@ -381,9 +435,11 @@ class HackRFLifecycleNode(LifecycleNode):
                                 self.get_logger().error(
                                     f'start_rx after retune failed: {e}')
                                 self._handle_usb_fault('param_worker:start_rx')
-            # Reset PSD accumulator after any param change
-            self._psd_accum[:] = 0
-            self._accum_count = 0
+            # Reset PSD accumulator under _accum_lock to prevent race with
+            # _process_and_publish_inner which also reads/writes these fields.
+            with self._accum_lock:
+                self._psd_accum[:] = 0
+                self._accum_count = 0
             self._param_queue.task_done()
 
     def _apply_pending(self, pending: dict):
@@ -415,17 +471,20 @@ class HackRFLifecycleNode(LifecycleNode):
     # ------------------------------------------------------------------
 
     def _rx_callback(self, data: bytes) -> bool:
-        """USB thread callback — must not raise (pyhackrf2 C thread). (REL-03)"""
+        """USB thread callback — MINIMAL HOT PATH. Must not raise. (REL-03)
+
+        Only performs: timestamp update, queue put, recorder fan-out.
+        NO numpy operations, NO logging, NO string formatting.
+        Clip detection and all signal processing happen in the timer callback
+        (_process_and_publish_inner) running on the ROS2 executor thread.
+
+        Returns False (continue) normally; True (stop streaming) on USB fault.
+        """
         try:
             self._last_rx_time = time.monotonic()
             chunk = bytes(data)
 
-            # ADC clipping detection — discard frames with >0.5% at rails
-            arr = np.frombuffer(chunk, dtype=np.int8)
-            if np.count_nonzero(np.abs(arr) >= 127) > len(arr) * ADC_CLIP_THRESHOLD:
-                self._clip_count += 1
-                return False  # drop clipped frame
-
+            # Primary IQ queue — drop-oldest on full
             try:
                 self._iq_queue.put_nowait(chunk)
             except queue.Full:
@@ -439,8 +498,8 @@ class HackRFLifecycleNode(LifecycleNode):
                     pass
                 self._rx_overflow_count += 1
 
-            # Recorder fan-out (D-09, D-10): put_nowait; drop-oldest on full
-            rq = self._recorder_q  # snapshot ref under CPython GIL
+            # Recorder fan-out (D-09, D-10) — snapshot ref under CPython GIL
+            rq = self._recorder_q
             if rq is not None:
                 try:
                     rq.put_nowait(chunk)
@@ -454,13 +513,12 @@ class HackRFLifecycleNode(LifecycleNode):
                     except queue.Full:
                         pass
                     self._recorder_q_drops += 1
-                    self.get_logger().warning(
-                        'Recorder queue full — dropped oldest IQ chunk')
+                    # NOTE: no logger call here — logging blocks the USB thread
 
             return False
         except (RuntimeError, OSError):
             self._handle_usb_fault('rx_callback')
-            return False
+            return True  # stop streaming on USB fault
 
     def _flush_queue(self):
         while not self._iq_queue.empty():
@@ -482,52 +540,70 @@ class HackRFLifecycleNode(LifecycleNode):
             f'USB fault detected in {source} — HackRF may be disconnected')
 
     def _agc_tick(self) -> None:
-        """Check ADC clip rate and reduce gain if needed (REL-01).
+        """Bidirectional AGC: reduce gain on clipping, recover gain after quiet period.
 
-        Called once per PSD publish cycle. Uses a clip-count delta over
-        AGC_CLIP_WINDOW cycles. Hysteresis: AGC_HOLD_FRAMES cycles between
-        consecutive reductions.
+        Called once per PSD publish cycle (REL-01).
+        Only calls set_parameters() — hardware application is handled by
+        _param_worker to avoid double-writes (H-ROS-5 fix).
+
+        Gain reduction: fires when clips_in_window >= AGC_CLIP_WINDOW.
+        Gain recovery: fires after AGC_QUIET_CYCLES consecutive clip-free cycles.
+        Hysteresis: AGC_HOLD_FRAMES cycles between any two AGC actions.
         """
         self._agc_cycle_counter += 1
 
         if self._agc_hold_counter > 0:
             self._agc_hold_counter -= 1
-            self._agc_clip_snapshot = self._clip_count  # keep snapshot fresh
+            self._agc_clip_snapshot = self._clip_count
             return
 
         clips_in_window = self._clip_count - self._agc_clip_snapshot
         self._agc_clip_snapshot = self._clip_count
 
-        if clips_in_window < AGC_CLIP_WINDOW:
-            return   # clip rate acceptable
-
-        # Reduce LNA first, then VGA
         lna = int(self.get_parameter('lna_gain').value)
         vga = int(self.get_parameter('vga_gain').value)
 
-        if lna > 0:
-            new_lna = max(0, lna - AGC_LNA_STEP)
-            self.set_parameters([Parameter('lna_gain', value=new_lna)])
-            with self._device_lock:
-                if self._hackrf is not None:
-                    self._hackrf.lna_gain = new_lna
-            self._agc_last_action = (
-                f'lna {lna}->{new_lna} @ cycle {self._agc_cycle_counter}')
-            self.get_logger().info(f'AGC: {self._agc_last_action}')
-        elif vga > 0:
-            new_vga = max(0, vga - AGC_VGA_STEP)
-            self.set_parameters([Parameter('vga_gain', value=new_vga)])
-            with self._device_lock:
-                if self._hackrf is not None:
-                    self._hackrf.vga_gain = new_vga
-            self._agc_last_action = (
-                f'vga {vga}->{new_vga} @ cycle {self._agc_cycle_counter}')
-            self.get_logger().info(f'AGC: {self._agc_last_action}')
-        else:
-            self._agc_last_action = 'at_minimum_gains'
-            return   # nothing to reduce
+        if clips_in_window >= AGC_CLIP_WINDOW:
+            # Reduce LNA first, then VGA
+            self._agc_quiet_counter = 0
+            if lna > 0:
+                new_lna = max(0, lna - AGC_LNA_STEP)
+                self.set_parameters([Parameter('lna_gain', value=new_lna)])
+                self._agc_last_action = f'lna {lna}->{new_lna} @ cycle {self._agc_cycle_counter}'
+                self.get_logger().info(f'AGC: {self._agc_last_action}')
+            elif vga > 0:
+                new_vga = max(0, vga - AGC_VGA_STEP)
+                self.set_parameters([Parameter('vga_gain', value=new_vga)])
+                self._agc_last_action = f'vga {vga}->{new_vga} @ cycle {self._agc_cycle_counter}'
+                self.get_logger().info(f'AGC: {self._agc_last_action}')
+            else:
+                self._agc_last_action = 'at_minimum_gains'
+                return
+            self._agc_hold_counter = AGC_HOLD_FRAMES
 
-        self._agc_hold_counter = AGC_HOLD_FRAMES
+        elif clips_in_window == 0:
+            # No clips — increment quiet counter; recover gain after enough quiet cycles
+            self._agc_quiet_counter += 1
+            if self._agc_quiet_counter >= AGC_QUIET_CYCLES:
+                self._agc_quiet_counter = 0
+                # Prefer VGA increase first (finer steps, less noise figure impact)
+                if vga < 62:
+                    new_vga = min(62, vga + AGC_VGA_STEP)
+                    self.set_parameters([Parameter('vga_gain', value=new_vga)])
+                    self._agc_last_action = (
+                        f'vga {vga}->{new_vga} (recover) @ cycle {self._agc_cycle_counter}')
+                    self.get_logger().info(f'AGC: {self._agc_last_action}')
+                    self._agc_hold_counter = AGC_HOLD_FRAMES
+                elif lna < 40:
+                    new_lna = min(40, lna + AGC_LNA_STEP)
+                    self.set_parameters([Parameter('lna_gain', value=new_lna)])
+                    self._agc_last_action = (
+                        f'lna {lna}->{new_lna} (recover) @ cycle {self._agc_cycle_counter}')
+                    self.get_logger().info(f'AGC: {self._agc_last_action}')
+                    self._agc_hold_counter = AGC_HOLD_FRAMES
+        else:
+            # Some clips but below threshold — reset quiet counter
+            self._agc_quiet_counter = 0
 
     def _fft_frame(self, iq: np.ndarray, sample_rate: float) -> np.ndarray:
         """Compute single-frame PSD (linear power) with corrections.
@@ -558,9 +634,19 @@ class HackRFLifecycleNode(LifecycleNode):
                      sample_rate: float) -> int:
         """Process one raw IQ chunk into linear PSD accumulator.
 
-        Uses 50% overlapping FFT frames. Returns number of frames added.
+        Also performs ADC clip detection (moved here from _rx_callback to keep
+        the USB hot path free of numpy allocations).
+
+        Uses 50% overlapping FFT frames. Returns number of frames added
+        (0 if chunk was clipped and discarded).
         """
         samples = np.frombuffer(raw, dtype=np.int8).astype(np.float32)
+
+        # ADC clip detection — discard frames with >0.5% samples at rails
+        if np.count_nonzero(np.abs(samples) >= 127) > len(samples) * ADC_CLIP_THRESHOLD:
+            self._clip_count += 1
+            return 0
+
         samples *= (1.0 / 128.0)
         n = FFT_SIZE * 2  # I and Q interleaved
         step = n // 2     # 50% overlap
@@ -600,21 +686,31 @@ class HackRFLifecycleNode(LifecycleNode):
 
     def _process_and_publish_inner(self):
         sample_rate = self.get_parameter('sample_rate').value
+        last_raw: bytes | None = None
         while True:
             try:
                 raw = self._iq_queue.get_nowait()
             except queue.Empty:
                 break
-            self._accum_count += self._process_raw(
-                raw, self._psd_accum, sample_rate)
+            frames_added = self._process_raw(raw, self._psd_accum, sample_rate)
+            if frames_added > 0:
+                last_raw = raw  # track most recent non-clipped chunk for IQ publish
+            with self._accum_lock:
+                self._accum_count += frames_added
 
-        if self._accum_count < PSD_AVERAGING:
+        with self._accum_lock:
+            count = self._accum_count
+        if count < PSD_AVERAGING:
             return
 
-        psd_linear = self._psd_accum / self._accum_count
+        with self._accum_lock:
+            if self._accum_count < PSD_AVERAGING:
+                return  # re-check under lock (param_worker may have reset)
+            psd_linear = self._psd_accum / self._accum_count
+            self._psd_accum[:] = 0
+            self._accum_count = 0
+
         psd_db = 10.0 * np.log10(np.maximum(psd_linear, 1e-20))
-        self._psd_accum[:] = 0
-        self._accum_count = 0
 
         msg = SpectrumStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -626,6 +722,15 @@ class HackRFLifecycleNode(LifecycleNode):
         msg.psd_db = psd_db.tolist()
         msg.noise_floor_db = float(np.median(psd_db))
         self._spectrum_pub.publish(msg)
+
+        # Publish raw IQ for cyclo_node and iq_recorder_node (C-ROS-1 fix).
+        # One chunk per PSD publish cycle (~10 Hz). BEST_EFFORT — drops are fine.
+        if last_raw is not None and self._iq_pub is not None:
+            samples = np.frombuffer(last_raw, dtype=np.int8).astype(np.float32)
+            samples *= (1.0 / 128.0)
+            iq_msg = Float32MultiArray()
+            iq_msg.data = samples.tolist()  # interleaved [I0, Q0, I1, Q1, ...]
+            self._iq_pub.publish(iq_msg)
 
         self._agc_tick()
 

@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
@@ -27,7 +28,7 @@ class SpectrumDisplayNode(Node):
     def __init__(self):
         super().__init__('spectrum_display')
 
-        # Match publisher's BEST_EFFORT QoS
+        # Match publisher's RELIABLE QoS
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
@@ -56,8 +57,13 @@ def main(args=None):
     rclpy.init(args=args)
     node = SpectrumDisplayNode()
 
-    spin_thread = threading.Thread(
-        target=rclpy.spin, args=(node,), daemon=True)
+    # Use an explicit executor so we can call executor.shutdown() before
+    # destroy_node() — calling rclpy.spin() on a daemon thread and then
+    # destroy_node() from the main thread can segfault in the rclpy C extension
+    # (M-RT-2 fix).
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
     # --- Matplotlib setup (main thread) ---
@@ -146,6 +152,7 @@ def main(args=None):
         pass
 
     plt.close('all')
+    executor.shutdown()
     node.destroy_node()
     rclpy.try_shutdown()
 

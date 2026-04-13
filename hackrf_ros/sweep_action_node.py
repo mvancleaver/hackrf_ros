@@ -331,19 +331,30 @@ class SweepActionNode(Node):
             return False
 
     def _wait_for_spectrum(self, timeout_s: float) -> SpectrumStamped | None:
-        """Block until a new SpectrumStamped is received or timeout.
+        """Block until a SpectrumStamped arrives strictly after this call.
 
-        Clears the event before waiting so only *new* messages after this
-        call trigger the return.
+        Uses object identity to detect genuinely new messages, avoiding the
+        TOCTOU race where a message arrives between Event.clear() and
+        Event.wait() (M-ROS-4 fix).
 
         Returns:
-            The latest SpectrumStamped, or None on timeout.
+            A SpectrumStamped newer than the one present when this method was
+            called, or None on timeout.
         """
+        old = self._latest_spectrum
         self._spectrum_event.clear()
-        fired = self._spectrum_event.wait(timeout=timeout_s)
-        if fired:
-            return self._latest_spectrum
-        return None
+        deadline = time.monotonic() + timeout_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self._spectrum_event.wait(timeout=min(remaining, 0.05))
+            current = self._latest_spectrum
+            if current is not old:
+                return current
+            # Same object — either spurious wake or message arrived before clear().
+            # Clear and re-wait for the next genuine arrival.
+            self._spectrum_event.clear()
 
     # ------------------------------------------------------------------
     # Execute callback

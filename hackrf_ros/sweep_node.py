@@ -19,6 +19,7 @@ import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy.fft
 
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
@@ -110,7 +111,7 @@ class SweepEngine:
                 frame = samples[i:i + n]
                 iq = frame[0::2] + 1j * frame[1::2]
                 windowed = iq * self._window
-                spectrum = np.fft.fftshift(np.fft.fft(windowed))
+                spectrum = scipy.fft.fftshift(scipy.fft.fft(windowed))
                 power = np.abs(spectrum) ** 2 / FFT_SIZE
                 self._psd_accum += 10.0 * np.log10(np.maximum(power, 1e-20))
                 self._accum_count += 1
