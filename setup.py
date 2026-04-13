@@ -15,8 +15,13 @@ setup(
             'launch/spectrum.launch.py',
             'launch/sensor_pipeline.launch.py',
             'launch/autonomy_pipeline.launch.py',
+            'launch/multi_radio.launch.py',
         ]),
-        ('share/' + package_name + '/config', ['config/hackrf_rx.yaml']),
+        ('share/' + package_name + '/config', [
+            'config/hackrf_rx.yaml',
+            'config/hackrf_radio_0.yaml',
+            'config/hackrf_radio_1.yaml',
+        ]),
     ],
     install_requires=['setuptools', 'scipy>=1.11'],
     zip_safe=True,
@@ -35,6 +40,8 @@ setup(
             'cfar_node = hackrf_ros.cfar_node:main',
             'iq_recorder_node = hackrf_ros.iq_recorder_node:main',
             'rf_map_node = hackrf_ros.rf_map_node:main',
+            'emitter_loc_node = hackrf_ros.emitter_loc_node:main',
+            'cyclo_node = hackrf_ros.cyclo_node:main',
         ],
     },
 )

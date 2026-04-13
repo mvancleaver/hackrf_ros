@@ -1,0 +1,9 @@
+/hackrf_0/hackrf_node:
+  ros__parameters:
+    center_frequency: 2437000000.0
+    sample_rate: 20000000.0
+    lna_gain: 16
+    vga_gain: 20
+    amp_enabled: false
+    antenna_frame: hackrf_antenna_0
+    device_index: 0
