@@ -1,0 +1,19 @@
+# Goal
+float64 freq_min_hz
+float64 freq_max_hz
+float64 step_hz
+int32   averaging
+---
+# Result
+bool    success
+string  message
+float64 freq_min_hz
+float64 freq_max_hz
+float64 bin_width_hz
+float32[] psd_db
+---
+# Feedback
+int32   current_hop
+int32   total_hops
+float64 current_freq_hz
+float32[] partial_psd_db

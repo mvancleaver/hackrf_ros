@@ -1,0 +1,17 @@
+# Goal
+float64 duration_s
+string  output_path
+string  trigger_reason
+---
+# Result
+bool    success
+string  message
+string  sigmf_data_path
+string  sigmf_meta_path
+int64   samples_written
+int32   queue_drops
+---
+# Feedback
+int64   bytes_written
+float64 duration_elapsed_s
+int32   queue_drops
