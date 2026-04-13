@@ -16,12 +16,12 @@
 
 ### Detection & Classification
 
-- [ ] **DET-01**: CA-CFAR energy detector operates on PSD array with configurable guard cells, reference cells, and Pfa
-- [ ] **DET-02**: Adjacent detected bins grouped into signal detections with centroid frequency, 3 dB bandwidth, and integrated power
-- [ ] **DET-03**: Persistence tracker confirms detections across N consecutive frames before publishing (configurable N)
-- [ ] **DET-04**: Each detection assigned a stable ID that persists across frames via frequency-proximity matching
-- [ ] **DET-05**: Band classification assigns label to each detection based on center frequency + bandwidth lookup table
-- [ ] **DET-06**: Classification covers at minimum: WiFi, Bluetooth/BLE, ZigBee, LTE, ISM narrowband, unknown
+- [x] **DET-01**: CA-CFAR energy detector operates on PSD array with configurable guard cells, reference cells, and Pfa
+- [x] **DET-02**: Adjacent detected bins grouped into signal detections with centroid frequency, 3 dB bandwidth, and integrated power
+- [x] **DET-03**: Persistence tracker confirms detections across N consecutive frames before publishing (configurable N)
+- [x] **DET-04**: Each detection assigned a stable ID that persists across frames via frequency-proximity matching
+- [x] **DET-05**: Band classification assigns label to each detection based on center frequency + bandwidth lookup table
+- [x] **DET-06**: Classification covers at minimum: WiFi, Bluetooth/BLE, ZigBee, LTE, ISM narrowband, unknown
 
 ### Sweep & Survey
 
