@@ -26,8 +26,8 @@
 ### Sweep & Survey
 
 - [x] **SWP-01**: Sweep implemented as ROS2 action server with per-hop progress feedback
-- [ ] **SWP-02**: Sweep action supports cancel (abort mid-sweep, restore original frequency)
-- [ ] **SWP-03**: Sweep returns stitched composite PSD with Tukey-blended hop boundaries in linear domain
+- [x] **SWP-02**: Sweep action supports cancel (abort mid-sweep, restore original frequency)
+- [x] **SWP-03**: Sweep returns stitched composite PSD with Tukey-blended hop boundaries in linear domain
 
 ### IQ Recording
 

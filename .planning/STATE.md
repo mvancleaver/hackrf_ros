@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 02-03-PLAN.md — IQRecorderNode with SigMF write thread
-last_updated: "2026-04-13T04:10:00.790Z"
+stopped_at: Completed 02-02-PLAN.md (SweepActionNode)
+last_updated: "2026-04-13T04:10:06.259Z"
 last_activity: 2026-04-13
 progress:
   total_phases: 4
@@ -79,6 +79,8 @@ Recent decisions affecting current work:
 - [Phase 02]: sigmf added without version pin to Dockerfile; version pinning deferred to hardening phase per T-02-01-01
 - [Phase 02-robot-autonomy-integration]: SigMF 1.8.0 uses tofile(path) not dump(path, tofile=True); SigMFFile constructed without data_file= to avoid mmap on empty file
 - [Phase 02-robot-autonomy-integration]: IQRecorderNode subscribes to /hackrf/iq Float32MultiArray; converts Float32->ci8 in _iq_callback; driver _recorder_q is a forward hook not consumed in Phase 2
+- [Phase 02-robot-autonomy-integration]: Pure functions at module level (not as methods) for test isolation without rclpy.init
+- [Phase 02-robot-autonomy-integration]: MagicMock auto-generated request fields cause freq validation abort — must explicitly set goal fields in cancel test
 
 ### Pending Todos
 
@@ -92,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-13T04:09:57.095Z
-Stopped at: Completed 02-03-PLAN.md — IQRecorderNode with SigMF write thread
+Last session: 2026-04-13T04:10:06.255Z
+Stopped at: Completed 02-02-PLAN.md (SweepActionNode)
 Resume file: None
