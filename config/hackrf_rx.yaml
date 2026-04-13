@@ -1,7 +1,7 @@
 hackrf_node:
   ros__parameters:
-    center_frequency: 2447000000.0
-    sample_rate: 8000000.0
-    lna_gain: 16
-    vga_gain: 20
-    amp_enabled: false
+    center_frequency: 2437000000.0
+    sample_rate: 20000000.0
+    lna_gain: 32
+    vga_gain: 40
+    amp_enabled: true

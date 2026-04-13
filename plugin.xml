@@ -1,0 +1,17 @@
+<library path="hackrf_ros">
+  <class name="HackRFSpectrum"
+         type="hackrf_ros.spectrum_rqt_plugin.HackRFSpectrumPlugin"
+         base_class_type="rqt_gui_py::Plugin">
+    <description>Live HackRF spectrum display from /hackrf/spectrum</description>
+    <qtgui>
+      <group>
+        <label>HackRF</label>
+        <icon type="theme">utilities-system-monitor</icon>
+        <statustip>HackRF SDR tools</statustip>
+      </group>
+      <label>Spectrum Display</label>
+      <icon type="theme">utilities-system-monitor</icon>
+      <statustip>Live HackRF PSD spectrum display</statustip>
+    </qtgui>
+  </class>
+</library>

@@ -103,7 +103,7 @@ class CFARNode(Node):
             SpectrumStamped,
             '/hackrf/spectrum',
             self._spectrum_callback,
-            qos_best_effort,
+            qos_reliable,
             callback_group=cb_group,
         )
 
@@ -111,7 +111,7 @@ class CFARNode(Node):
         self._detections_pub = self.create_publisher(
             RFDetectionArray,
             '/hackrf/detections',
-            qos_best_effort,
+            qos_reliable,
         )
         self._env_pub = self.create_publisher(
             RFEnvironment,

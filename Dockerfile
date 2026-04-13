@@ -14,6 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-tf2-ros \
     ros-humble-geometry-msgs \
     ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-rqt \
+    ros-humble-rqt-common-plugins \
+    ros-humble-rqt-topic \
+    ros-humble-rqt-plot \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir pyhackrf2 "numpy<2" matplotlib scipy
@@ -29,7 +33,7 @@ COPY hackrf_ros/ /ws/src/hackrf_ros/hackrf_ros/
 COPY launch/    /ws/src/hackrf_ros/launch/
 COPY config/    /ws/src/hackrf_ros/config/
 COPY resource/  /ws/src/hackrf_ros/resource/
-COPY package.xml setup.py setup.cfg /ws/src/hackrf_ros/
+COPY package.xml setup.py setup.cfg plugin.xml /ws/src/hackrf_ros/
 
 # Build interfaces first, then driver
 SHELL ["/bin/bash", "-c"]

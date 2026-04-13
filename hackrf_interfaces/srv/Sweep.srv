@@ -1,0 +1,10 @@
+float64 freq_min
+float64 freq_max
+int32 averaging 4
+---
+bool success
+string message
+float64 freq_min
+float64 freq_max
+float64 bin_width
+float32[] psd_db

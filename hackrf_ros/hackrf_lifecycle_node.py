@@ -103,7 +103,7 @@ class HackRFLifecycleNode(LifecycleNode):
         self._apply_params_to_device()
 
         qos_stream = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=5,
         )
