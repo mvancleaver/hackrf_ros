@@ -210,6 +210,11 @@ class HackRFLifecycleNode(LifecycleNode):
 
     def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
         self.get_logger().info('Activating...')
+        # Activate lifecycle publishers (spectrum, iq) before starting RX so they
+        # are ready to publish as soon as the first timer callback fires.
+        ret = super().on_activate(state)
+        if ret != TransitionCallbackReturn.SUCCESS:
+            return ret
         with self._device_lock:
             if self._hackrf is None:
                 self.get_logger().error('No device.')
@@ -268,7 +273,7 @@ class HackRFLifecycleNode(LifecycleNode):
 
         self._activate_time = None
         self.get_logger().info('Deactivated.')
-        return TransitionCallbackReturn.SUCCESS
+        return super().on_deactivate(state)
 
     def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
         # Stop param worker if it wasn't stopped by on_deactivate (e.g. on_error path)
@@ -687,7 +692,11 @@ class HackRFLifecycleNode(LifecycleNode):
     def _process_and_publish_inner(self):
         sample_rate = self.get_parameter('sample_rate').value
         last_raw: bytes | None = None
-        while True:
+        # Stop consuming once we have enough frames for one averaging window.
+        # Draining the full queue (up to 64 chunks × ~62 frames each at 20 MSPS)
+        # blocks the executor for 2-4 s and starves the SetParameters service,
+        # causing sweep hop timeouts (_set_center_freq future not completing).
+        while self._accum_count < PSD_AVERAGING:
             try:
                 raw = self._iq_queue.get_nowait()
             except queue.Empty:
@@ -697,6 +706,15 @@ class HackRFLifecycleNode(LifecycleNode):
                 last_raw = raw  # track most recent non-clipped chunk for IQ publish
             with self._accum_lock:
                 self._accum_count += frames_added
+
+        # Flush remaining IQ without computing FFT — keeps queue from filling
+        # to maxsize (which would trigger drop-oldest and increment _rx_overflow_count).
+        # Also ensures the next publish cycle processes fresh data.
+        while True:
+            try:
+                self._iq_queue.get_nowait()
+            except queue.Empty:
+                break
 
         with self._accum_lock:
             count = self._accum_count

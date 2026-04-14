@@ -124,7 +124,10 @@ class HackRFSpectrumPlugin(Plugin):
 
         # ── Thread-safe data ─────────────────────────────────────────
         self._lock = threading.Lock()
-        self._spectrum_msg: SpectrumStamped | None = None
+        # _spectrum_msg replaced by a bounded queue so every frame reaches the
+        # waterfall — a single-slot design drops ~40% of messages at 20 Hz
+        # driver / 12 Hz plot timer.  Drop-oldest on overflow.
+        self._spectrum_q: queue.Queue = queue.Queue(maxsize=120)
         self._detections_msg: RFDetectionArray | None = None
         self._emitter_map_msg: RFEmitterMap | None = None
         self._cyclo_detections_msg: RFDetectionArray | None = None
@@ -140,17 +143,29 @@ class HackRFSpectrumPlugin(Plugin):
         self._sweeping = False
         self._sweep_continuous = False   # continuous sweep mode
         self._sweep_in_flight = False    # a single sweep goal is active
-        self._hide_live_psd = False      # True after sweep until tune/clear
+        self._hide_live_psd = False      # True while sweeping; auto-cleared on completion
+
+        # Thread-safe signals from executor → Qt thread
+        self._sweep_status_pending: str | None = None   # status text to apply next tick
+        self._sweep_progress_reset = False              # True → reset progress bar next tick
 
         # ── Plot state ───────────────────────────────────────────────
         self._y_min = -120.0
-        self._y_max = -40.0
+        self._y_max = -60.0
         self._prev_center = 0.0
         self._prev_rate = 0.0
         self._det_patches: list = []
         self._det_labels: list = []
         self._sweep_line = None
         self._sweep_fill = None
+
+        # ── Waterfall state ──────────────────────────────────────────
+        self._n_wf_rows: int = 80                   # scrolling history depth
+        self._wf_buf: np.ndarray | None = None      # (n_wf_rows, n_bins) float32
+        self._wf_n_bins: int = 0
+        self._wf_center: float = 0.0               # tracks retune → clears buffer
+        self._wf_rate: float = 0.0
+        self._wf_img = None                         # imshow artist
 
         # ── Widget ───────────────────────────────────────────────────
         self._widget = QWidget()
@@ -162,17 +177,24 @@ class HackRFSpectrumPlugin(Plugin):
         root.setSpacing(4)
         self._widget.setLayout(root)
 
-        # Control row: [tune] [sweep] [recorder] [intel]
+        # Control row: fixed height, does not grow with window resize
+        ctrl_widget = QWidget()
+        ctrl_widget.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed)
         ctrl = QHBoxLayout()
         ctrl.setSpacing(8)
+        ctrl.setContentsMargins(0, 0, 0, 0)
         ctrl.addWidget(self._build_tune_group())
         ctrl.addWidget(self._build_sweep_group())
         ctrl.addWidget(self._build_recorder_group())
         ctrl.addWidget(self._build_intel_group())
-        root.addLayout(ctrl)
+        ctrl_widget.setLayout(ctrl)
+        root.addWidget(ctrl_widget, stretch=0)
 
-        # Plot
-        root.addWidget(self._build_plot())
+        # Plot canvas: takes all remaining vertical space
+        canvas = self._build_plot()
+        canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        root.addWidget(canvas, stretch=1)
 
         context.add_widget(self._widget)
 
@@ -381,15 +403,20 @@ class HackRFSpectrumPlugin(Plugin):
         return g
 
     def _build_plot(self) -> FigureCanvas:
-        self._figure = Figure(figsize=(12, 4), facecolor=_BG)
+        self._figure = Figure(figsize=(12, 5), facecolor=_BG,
+                              layout='constrained')
         self._canvas = FigureCanvas(self._figure)
         self._canvas.setStyleSheet('background-color: transparent;')
-        self._ax = self._figure.add_subplot(111)
+
+        # Two-pane layout: PSD line (top, 3 parts) + scrolling waterfall (bottom, 1 part)
+        gs = self._figure.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.05)
+
+        # ── PSD axes ──────────────────────────────────────────────────
+        self._ax = self._figure.add_subplot(gs[0])
         self._ax.set_facecolor(_BG)
         for sp in self._ax.spines.values():
             sp.set_color(_GRID)
-        self._ax.tick_params(colors=_FG, labelsize=9)
-        self._ax.set_xlabel('Frequency (MHz)', color=_FG, fontsize=10)
+        self._ax.tick_params(colors=_FG, labelsize=9, labelbottom=False)
         self._ax.set_ylabel('Power (dBFS)', color=_FG, fontsize=10)
         self._ax.grid(True, alpha=0.25, color=_GRID)
         self._ax.set_title('Waiting for /hackrf/spectrum …', color=_FG, fontsize=10)
@@ -398,18 +425,35 @@ class HackRFSpectrumPlugin(Plugin):
         dummy_p = np.full(128, -100.0)
         self._live_line, = self._ax.plot(
             dummy_f, dummy_p, color=_GRN, linewidth=0.9, label='Live PSD')
-        self._live_fill = None
         self._ax.set_xlim(dummy_f[0], dummy_f[-1])
-        self._ax.set_ylim(-120, -40)
+        self._ax.set_ylim(-120, -60)
 
-        self._figure.tight_layout(pad=0.8)
+        # ── Waterfall axes ────────────────────────────────────────────
+        self._ax_wf = self._figure.add_subplot(gs[1], sharex=self._ax)
+        self._ax_wf.set_facecolor(_BG)
+        for sp in self._ax_wf.spines.values():
+            sp.set_color(_GRID)
+        self._ax_wf.tick_params(colors=_FG, labelsize=9)
+        self._ax_wf.set_xlabel('Frequency (MHz)', color=_FG, fontsize=10)
+        self._ax_wf.set_yticks([])
+
         return self._canvas
 
     # ── ROS callbacks (executor thread) ──────────────────────────────────────
 
     def _spectrum_cb(self, msg: SpectrumStamped) -> None:
-        with self._lock:
-            self._spectrum_msg = msg
+        # Drop-oldest on overflow so the waterfall never stalls
+        try:
+            self._spectrum_q.put_nowait(msg)
+        except queue.Full:
+            try:
+                self._spectrum_q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._spectrum_q.put_nowait(msg)
+            except queue.Full:
+                pass
 
     def _detections_cb(self, msg: RFDetectionArray) -> None:
         with self._lock:
@@ -528,12 +572,11 @@ class HackRFSpectrumPlugin(Plugin):
             self._sweep_fill.remove()
             self._sweep_fill = None
         self._hide_live_psd = False
+        self._prev_center = 0.0   # force xlim reset on next live PSD frame
         self._live_line.set_visible(True)
-        if self._live_fill is not None:
-            self._live_fill.set_visible(True)
         if self._ax.get_legend():
             self._ax.legend_.remove()
-        self._canvas.draw()
+        self._canvas.draw_idle()
 
     def _send_sweep_goal(self, goal: SweepAction.Goal) -> None:
         if not self._sweep_client.wait_for_server(timeout_sec=5.0):
@@ -590,10 +633,15 @@ class HackRFSpectrumPlugin(Plugin):
             goal.step_hz     = self._sweep_step.value() * 1e6
             goal.averaging   = self._sweep_avg.value()
             self._sweep_in_flight = True
+            # Post signals for Qt thread to consume — safe cross-thread update
+            self._sweep_status_pending = 'Rescanning…'
+            self._sweep_progress_reset = True
             threading.Thread(
                 target=self._send_sweep_goal, args=(goal,), daemon=True).start()
         else:
             self._sweeping = False
+            self._hide_live_psd = False   # restore live PSD after single sweep
+            self._prev_center = 0.0       # force xlim reset on next live PSD frame
 
     # ── IQ recorder control ───────────────────────────────────────────────────
 
@@ -668,12 +716,70 @@ class HackRFSpectrumPlugin(Plugin):
             self._rec_btn.setText('● Record')
             self._rec_btn.setStyleSheet(_btn_style())
 
+    # ── Waterfall ─────────────────────────────────────────────────────────────
+
+    def _append_waterfall(self, msg: SpectrumStamped) -> None:
+        """Scroll one PSD row into the waterfall buffer and refresh the imshow artist.
+
+        Called for EVERY queued spectrum message so no frames are dropped from
+        the history.  The buffer is reset on frequency or bin-count change.
+        """
+        psd = np.array(msg.psd_db, dtype=np.float32)
+        n = len(psd)
+        center = msg.center_frequency_hz
+        rate = msg.sample_rate_hz
+        f_min = (center - rate / 2) / 1e6
+        f_max = (center + rate / 2) / 1e6
+
+        # Reset on frequency change or first call
+        if (self._wf_buf is None
+                or self._wf_n_bins != n
+                or self._wf_center != center
+                or self._wf_rate != rate):
+            self._wf_buf = np.full(
+                (self._n_wf_rows, n), self._y_min, dtype=np.float32)
+            self._wf_n_bins = n
+            self._wf_center = center
+            self._wf_rate = rate
+            if self._wf_img is not None:
+                self._wf_img.remove()
+                self._wf_img = None
+
+        # Scroll: shift rows down by 1, write newest row at top
+        # np.roll is safe for overlapping src/dst; avoids manual copy direction issues.
+        self._wf_buf = np.roll(self._wf_buf, 1, axis=0)
+        self._wf_buf[0] = psd
+
+        if self._wf_img is None:
+            self._wf_img = self._ax_wf.imshow(
+                self._wf_buf,
+                aspect='auto',
+                origin='upper',
+                extent=[f_min, f_max, self._n_wf_rows, 0],
+                cmap='plasma',
+                vmin=self._y_min,
+                vmax=self._y_max,
+                interpolation='nearest',
+            )
+        else:
+            self._wf_img.set_data(self._wf_buf)
+            self._wf_img.set_extent([f_min, f_max, self._n_wf_rows, 0])
+            self._wf_img.set_clim(self._y_min, self._y_max)
+
     # ── Qt timer — plot update ────────────────────────────────────────────────
 
     def _update_plot(self) -> None:
+        # Drain all pending spectrum messages — queue preserves every frame so the
+        # waterfall gets continuous history.  Live PSD line uses only the latest.
+        spectrum_msgs: list = []
+        while True:
+            try:
+                spectrum_msgs.append(self._spectrum_q.get_nowait())
+            except queue.Empty:
+                break
+        smsg = spectrum_msgs[-1] if spectrum_msgs else None
+
         with self._lock:
-            smsg = self._spectrum_msg
-            self._spectrum_msg = None
             dmsg = self._detections_msg
             emitter_map = self._emitter_map_msg
             cyclo_msg = self._cyclo_detections_msg
@@ -681,6 +787,14 @@ class HackRFSpectrumPlugin(Plugin):
             self._sweep_result = None
 
         redraw = False
+
+        # ── Thread-safe signals from executor → Qt thread ──────────────────
+        if self._sweep_status_pending is not None:
+            self._sweep_status.setText(self._sweep_status_pending)
+            self._sweep_status_pending = None
+        if self._sweep_progress_reset:
+            self._sweep_progress.setValue(0)
+            self._sweep_progress_reset = False
 
         # ── Sweep button / status ──────────────────────────────────────────
         while True:
@@ -708,8 +822,6 @@ class HackRFSpectrumPlugin(Plugin):
         live_visible = not self._hide_live_psd
         if self._live_line.get_visible() != live_visible:
             self._live_line.set_visible(live_visible)
-            if self._live_fill is not None:
-                self._live_fill.set_visible(live_visible)
             redraw = True
 
         # ── Draw sweep overlay ─────────────────────────────────────────────
@@ -727,6 +839,13 @@ class HackRFSpectrumPlugin(Plugin):
             self._ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_FG,
                             fontsize=8, loc='upper right')
             self._ax.set_xlim(freqs_mhz[0], freqs_mhz[-1])
+            redraw = True
+
+        # ── Waterfall — feed every queued frame regardless of hide state ─────
+        # Always update the waterfall (even while sweeping) so history is complete.
+        if spectrum_msgs:
+            for m in spectrum_msgs:
+                self._append_waterfall(m)
             redraw = True
 
         # ── Live PSD (only update data when visible) ───────────────────────
@@ -747,20 +866,11 @@ class HackRFSpectrumPlugin(Plugin):
             self._live_line.set_xdata(freqs_mhz)
             self._live_line.set_ydata(psd)
 
-            if self._live_fill is not None:
-                self._live_fill.remove()
-            self._live_fill = self._ax.fill_between(
-                freqs_mhz, self._y_min, psd,
-                alpha=0.12, color=_GRN, zorder=1,
-                visible=live_visible)
-
             d_min = float(np.percentile(psd, 2))
-            d_max = float(np.percentile(psd, 99.5))
             self._y_min += 0.15 * (d_min - 5 - self._y_min)
-            self._y_max += 0.15 * (d_max + 5 - self._y_max)
-            if self._y_max - self._y_min < 20:
-                mid = (self._y_max + self._y_min) / 2
-                self._y_min, self._y_max = mid - 10, mid + 10
+            # Prevent y_min from approaching y_max — collapses display range
+            # and causes waterfall set_clim() normalization crash.
+            self._y_min = min(self._y_min, self._y_max - 20)
             self._ax.set_ylim(self._y_min, self._y_max)
 
             floor = float(smsg.noise_floor_db)
@@ -890,7 +1000,7 @@ class HackRFSpectrumPlugin(Plugin):
                 self._intel_emitter_lbl.setText('\n'.join(lines))
 
         if redraw:
-            self._canvas.draw()
+            self._canvas.draw_idle()
 
     # ── rqt lifecycle ─────────────────────────────────────────────────────────
 
