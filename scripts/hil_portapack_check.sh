@@ -33,31 +33,36 @@ else
     fail "A1 — observed ${VENDOR}:${PRODUCT} does not match 1d50:6018. Update udev/99-portapack.rules."
 fi
 
-# --- A2 — hackrf\n terminator is correct -----------------------------------
-# Send the command via /dev/portapack; the node should disappear within ~3 s.
+# --- A2 — hackrf\r\n terminator is correct ---------------------------------
+# A2 was HIL-resolved 2026-04-18: \n alone is insufficient on live Mayhem
+# firmware; CRLF triggers the mode-switch. PORTAPACK_COMMAND in the Python
+# code is b'hackrf\r\n'. This check validates that decision against the
+# current attached firmware.
 if [[ ! -e /dev/portapack ]]; then
     note "A2 skipped: /dev/portapack not present. Run scripts/install_portapack_udev.sh first."
 else
-    echo "A2: writing 'hackrf\\n' to /dev/portapack ..."
-    printf 'hackrf\n' > /dev/portapack
+    echo "A2: writing 'hackrf\\r\\n' to /dev/portapack ..."
+    printf 'hackrf\r\n' > /dev/portapack
     # Wait up to 5 s for the ACM node to disappear (transition completed).
+    A2_PASSED=0
     for i in $(seq 1 50); do
         if [[ ! -e "$NODE" ]]; then
-            pass "A2 — \\n terminator accepted; Mayhem exited after ${i}00 ms"
+            pass "A2 — \\r\\n terminator accepted; Mayhem exited after ${i}00 ms"
+            A2_PASSED=1
             break
         fi
         sleep 0.1
-        if [[ "$i" == "50" ]]; then
-            note "A2 FAIL candidate: ACM node still present after 5 s. Retry with \\r\\n:"
-            printf 'hackrf\r\n' > /dev/portapack || true
-            sleep 2
-            if [[ ! -e "$NODE" ]]; then
-                fail "A2 — \\n insufficient; \\r\\n worked. Update PORTAPACK_COMMAND to b'hackrf\\r\\n'."
-            else
-                fail "A2 — neither \\n nor \\r\\n triggered mode switch. Investigate Mayhem firmware version."
-            fi
-        fi
     done
+    if [[ "$A2_PASSED" == "0" ]]; then
+        note "A2 FAIL candidate: ACM node still present after 5 s with \\r\\n. Retry with \\n:"
+        printf 'hackrf\n' > /dev/portapack || true
+        sleep 2
+        if [[ ! -e "$NODE" ]]; then
+            fail "A2 — CRLF ineffective but LF worked. Firmware version regressed — revert PORTAPACK_COMMAND to b'hackrf\\n'."
+        else
+            fail "A2 — neither \\r\\n nor \\n triggered mode switch. Investigate Mayhem firmware version."
+        fi
+    fi
 fi
 
 # --- A3 — DTR/RTS settle duration sufficient -------------------------------
