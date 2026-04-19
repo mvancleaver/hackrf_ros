@@ -14,12 +14,15 @@ Lifecycle:
 """
 from __future__ import annotations
 
+import enum
+import os
 import queue
 import threading
 import time
 
 import numpy as np
 import scipy.fft
+import serial
 
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
@@ -73,6 +76,25 @@ AGC_QUIET_CYCLES = 30   # consecutive clip-free cycles before recovering gain
 DISCONNECT_ERROR_TIMEOUT = 2.0   # seconds before USB fault escalates WARN -> ERROR
 
 
+# Portapack boot transition (Phase 5, D-12, D-13, A3). REQ-P5-05..16.
+PORTAPACK_DEFAULT_DEVICE = '/dev/portapack'
+PORTAPACK_DEFAULT_ENABLE = True
+PORTAPACK_DEFAULT_REENUM_TIMEOUT_S = 5.0
+PORTAPACK_DEFAULT_OPEN_RETRIES = 3
+PORTAPACK_DTR_SETTLE_S = 0.05        # CDC-ACM DTR/RTS settle (Pitfall 1, A3)
+PORTAPACK_POLL_INTERVAL_S = 0.1      # re-enumeration probe cadence
+PORTAPACK_OPEN_RETRY_DELAY_S = 0.25  # D-10 USB kernel-claim race
+PORTAPACK_COMMAND = b'hackrf\n'      # Mayhem USB-serial mode-switch command
+
+
+class PortapackTransitionResult(enum.Enum):
+    """Outcome of _transition_portapack(). See RESEARCH.md §Pattern 3."""
+    SKIPPED = 'skipped'
+    SUCCEEDED = 'succeeded'
+    RETRIED = 'retried'
+    FAILED = 'failed'
+
+
 class HackRFLifecycleNode(LifecycleNode):
     """ROS2 lifecycle node for HackRF One SDR."""
 
@@ -94,6 +116,11 @@ class HackRFLifecycleNode(LifecycleNode):
         self._last_rx_time: float = 0.0
         self._rx_overflow_count = 0
         self._clip_count = 0
+
+        # Portapack boot transition state (D-11, D-15). Initial value
+        # matches the SKIPPED case so diagnostics reports a sensible
+        # default before on_configure has run.
+        self._last_portapack_transition = PortapackTransitionResult.SKIPPED.value
 
         # AGC state (REL-01)
         self._agc_hold_counter: int = 0
