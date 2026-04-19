@@ -84,7 +84,7 @@ PORTAPACK_DEFAULT_OPEN_RETRIES = 3
 PORTAPACK_DTR_SETTLE_S = 0.05        # CDC-ACM DTR/RTS settle (Pitfall 1, A3)
 PORTAPACK_POLL_INTERVAL_S = 0.1      # re-enumeration probe cadence
 PORTAPACK_OPEN_RETRY_DELAY_S = 0.25  # D-10 USB kernel-claim race
-PORTAPACK_COMMAND = b'hackrf\r\n'    # Mayhem USB-serial mode-switch — CRLF (A2 HIL-verified 2026-04-18; \n alone was insufficient on live firmware)
+PORTAPACK_COMMAND = b'hackrf\n'      # Mayhem USB-serial mode-switch — LF (A2 HIL-resolved 2026-04-18: either terminator works provided the DTR settle precedes the write; LF is standard)
 
 
 class PortapackTransitionResult(enum.Enum):

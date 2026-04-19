@@ -33,35 +33,55 @@ else
     fail "A1 — observed ${VENDOR}:${PRODUCT} does not match 1d50:6018. Update udev/99-portapack.rules."
 fi
 
-# --- A2 — hackrf\r\n terminator is correct ---------------------------------
-# A2 was HIL-resolved 2026-04-18: \n alone is insufficient on live Mayhem
-# firmware; CRLF triggers the mode-switch. PORTAPACK_COMMAND in the Python
-# code is b'hackrf\r\n'. This check validates that decision against the
-# current attached firmware.
+# --- A2 — command terminator + DTR settle path are correct ---------------
+# A2 was HIL-resolved 2026-04-18: bash `printf > /dev/portapack` loses the
+# first write because CDC-ACM DTR toggles on open and Mayhem isn't ready to
+# read yet. The Python pyserial path in the production code waits
+# PORTAPACK_DTR_SETTLE_S (50 ms) between open and write, which reliably
+# delivers the command on first attempt. This HIL test exercises the
+# production path exactly — if it fails, the production node will too.
 if [[ ! -e /dev/portapack ]]; then
     note "A2 skipped: /dev/portapack not present. Run scripts/install_portapack_udev.sh first."
+elif ! command -v python3 >/dev/null 2>&1; then
+    note "A2 skipped: python3 not on PATH. Install pyserial and retry."
 else
-    echo "A2: writing 'hackrf\\r\\n' to /dev/portapack ..."
-    printf 'hackrf\r\n' > /dev/portapack
-    # Wait up to 5 s for the ACM node to disappear (transition completed).
-    A2_PASSED=0
-    for i in $(seq 1 50); do
-        if [[ ! -e "$NODE" ]]; then
-            pass "A2 — \\r\\n terminator accepted; Mayhem exited after ${i}00 ms"
-            A2_PASSED=1
-            break
+    echo "A2: sending PORTAPACK_COMMAND via pyserial with 50 ms DTR settle ..."
+    if python3 - <<'PY'
+import sys
+import time
+try:
+    import serial
+except ImportError:
+    print("A2: pyserial not installed. Run: pip install 'pyserial>=3.5'")
+    sys.exit(2)
+
+with serial.Serial('/dev/portapack',
+                   baudrate=115200,
+                   bytesize=serial.EIGHTBITS,
+                   parity=serial.PARITY_NONE,
+                   stopbits=serial.STOPBITS_ONE,
+                   timeout=1.0,
+                   write_timeout=1.0) as port:
+    time.sleep(0.05)  # PORTAPACK_DTR_SETTLE_S — match production path
+    port.write(b'hackrf\n')
+    port.flush()
+PY
+    then
+        # Wait up to 5 s for the ACM node to disappear (transition completed).
+        A2_PASSED=0
+        for i in $(seq 1 50); do
+            if [[ ! -e "$NODE" ]]; then
+                pass "A2 — command accepted on first attempt; Mayhem exited after ${i}00 ms"
+                A2_PASSED=1
+                break
+            fi
+            sleep 0.1
+        done
+        if [[ "$A2_PASSED" == "0" ]]; then
+            fail "A2 — command written via pyserial+settle but ACM node still present after 5 s. Mayhem firmware may have regressed; try raising PORTAPACK_DTR_SETTLE_S."
         fi
-        sleep 0.1
-    done
-    if [[ "$A2_PASSED" == "0" ]]; then
-        note "A2 FAIL candidate: ACM node still present after 5 s with \\r\\n. Retry with \\n:"
-        printf 'hackrf\n' > /dev/portapack || true
-        sleep 2
-        if [[ ! -e "$NODE" ]]; then
-            fail "A2 — CRLF ineffective but LF worked. Firmware version regressed — revert PORTAPACK_COMMAND to b'hackrf\\n'."
-        else
-            fail "A2 — neither \\r\\n nor \\n triggered mode switch. Investigate Mayhem firmware version."
-        fi
+    else
+        fail "A2 — pyserial send helper exited non-zero. Install pyserial>=3.5 or check /dev/portapack permissions."
     fi
 fi
 

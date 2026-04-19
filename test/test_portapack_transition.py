@@ -379,8 +379,8 @@ class TestConstants:
         assert 'PORTAPACK_OPEN_RETRY_DELAY_S = 0.25' in _read_source()
 
     def test_command_constant(self):
-        """D-05 + A2 HIL resolution - PORTAPACK_COMMAND = b'hackrf\\r\\n'."""
-        assert "PORTAPACK_COMMAND = b'hackrf\\r\\n'" in _read_source()
+        """D-05 + A2 HIL resolution - PORTAPACK_COMMAND = b'hackrf\\n' (DTR settle makes terminator choice moot)."""
+        assert "PORTAPACK_COMMAND = b'hackrf\\n'" in _read_source()
 
 
 # ===========================================================================
@@ -499,13 +499,13 @@ class TestSerialParams:
         assert 'parity=serial.PARITY_NONE' in src
         assert 'stopbits=serial.STOPBITS_ONE' in src
 
-    def test_command_is_hackrf_crlf(self):
-        """D-05 + A2 HIL resolution - PORTAPACK_COMMAND = b'hackrf\\r\\n'; appears only via constant."""
+    def test_command_is_hackrf_newline(self):
+        """D-05 - PORTAPACK_COMMAND defined; b'hackrf\\n' only appears via constant."""
         src = _read_source()
-        assert "PORTAPACK_COMMAND = b'hackrf\\r\\n'" in src
+        assert "PORTAPACK_COMMAND = b'hackrf\\n'" in src
         # Count raw byte-literal occurrences; allowed once in the constant def.
-        assert src.count("b'hackrf\\r\\n'") == 1, (
-            "b'hackrf\\r\\n' must only appear in the PORTAPACK_COMMAND definition")
+        assert src.count("b'hackrf\\n'") == 1, (
+            "b'hackrf\\n' must only appear in the PORTAPACK_COMMAND definition")
 
     def test_dtr_settle_before_write(self):
         """A3 / Pitfall 1 - time.sleep(PORTAPACK_DTR_SETTLE_S) precedes port.write."""
