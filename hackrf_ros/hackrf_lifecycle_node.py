@@ -22,7 +22,6 @@ import time
 
 import numpy as np
 import scipy.fft
-import serial
 
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
@@ -449,32 +448,39 @@ class HackRFLifecycleNode(LifecycleNode):
     # ------------------------------------------------------------------
 
     def _portapack_send_hackrf_command(self, device_path: str) -> bool:
-        """Open /dev/portapack, write 'hackrf\\n', close. Return True on success.
+        """Open /dev/portapack raw, write 'hackrf\\n', close. Return True on success.
 
-        Never raises. Serial open failures are logged as ERROR per D-08.
-        Handles the Linux CDC-ACM DTR/RTS toggle side-effect (Pitfall 1)
-        with a PORTAPACK_DTR_SETTLE_S sleep before write.
+        Uses os.open(O_WRONLY|O_NOCTTY) instead of pyserial. HIL testing on
+        live Mayhem hardware (Phase 5 UAT, 2026-04-18) showed that pyserial's
+        Serial() constructor triggers termios/DTR behavior that causes Mayhem
+        to drop the command reliably. Raw file I/O matches the bash
+        `printf > /dev/portapack` pattern that empirically works. Mayhem
+        accepts the first or second attempt (D-09 retry covers cold-start
+        latency).
+
+        The PORTAPACK_DTR_SETTLE_S sleep is retained as insurance against
+        the kernel-level CDC-ACM DTR toggle on open.
+
+        Never raises. Open/write failures are logged as ERROR per D-08.
         """
+        fd = None
         try:
-            with serial.Serial(
-                port=device_path,
-                baudrate=115200,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=1.0,
-                write_timeout=1.0,
-            ) as port:
-                # Pitfall 1: Linux unconditionally toggles DTR/RTS on CDC-ACM
-                # open. First bytes may be dropped without this settle.
-                time.sleep(PORTAPACK_DTR_SETTLE_S)
-                port.write(PORTAPACK_COMMAND)
-                port.flush()
+            fd = os.open(device_path, os.O_WRONLY | os.O_NOCTTY)
+            # Pitfall 1: kernel may toggle DTR/RTS on CDC-ACM open even
+            # without termios. The settle absorbs the first few ms.
+            time.sleep(PORTAPACK_DTR_SETTLE_S)
+            os.write(fd, PORTAPACK_COMMAND)
             return True
-        except (serial.SerialException, OSError) as exc:
+        except OSError as exc:
             self.get_logger().error(
                 f'Portapack serial write failed on {device_path}: {exc}')
             return False
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
     def _poll_hackrf_present(self, timeout_s: float) -> bool:
         """Poll pyhackrf2.HackRF.enumerate() every PORTAPACK_POLL_INTERVAL_S

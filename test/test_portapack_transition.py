@@ -326,22 +326,17 @@ class TestComposeCgroup:
 
 
 # ===========================================================================
-# 3. TestDockerfileDep + TestSetupDep - REQ-P5-05 install support
+# 3. TestNoExternalSerialDep - REQ-P5-05 post-HIL resolution
 # ===========================================================================
-class TestDockerfileDep:
-    """Dockerfile must pip-install pyserial inside the container."""
+# HIL-resolved 2026-04-18: pyserial's Serial() constructor triggers CDC-ACM
+# behavior that causes Mayhem to drop the command. Production switched to
+# raw os.open + os.write, eliminating the pyserial dependency entirely.
+class TestNoExternalSerialDep:
+    """After the HIL fix, pyserial is no longer a dependency."""
 
-    def test_dockerfile_has_pyserial(self):
-        """REQ-P5-05 - pyserial appears on the pip install line."""
-        assert 'pyserial' in _read_file(_DOCKERFILE_PATH)
-
-
-class TestSetupDep:
-    """setup.py must declare pyserial>=3.5 in install_requires."""
-
-    def test_setup_has_pyserial_pin(self):
-        """REQ-P5-05 - 'pyserial>=3.5' pinned in install_requires."""
-        assert "'pyserial>=3.5'" in _read_file(_SETUP_PATH)
+    def test_setup_has_no_pyserial_pin(self):
+        """REQ-P5-05 - pyserial removed from install_requires (raw os.open instead)."""
+        assert 'pyserial' not in _read_file(_SETUP_PATH)
 
 
 # ===========================================================================
@@ -486,18 +481,26 @@ class TestDeclareParameters:
 # 7. TestSerialParams - D-05 (REQ-P5-05)
 # ===========================================================================
 class TestSerialParams:
-    """Serial-open parameters and command bytes (D-05, A3)."""
+    """Raw file I/O send path and command bytes (D-05, A3).
 
-    def test_baudrate_115200(self):
-        """D-05 - serial.Serial opened at 115200."""
-        assert 'baudrate=115200' in _read_source()
+    HIL-resolved 2026-04-18: pyserial's termios init causes Mayhem to drop
+    the command on live hardware. Production now uses os.open(O_WRONLY|O_NOCTTY)
+    + os.write to match the bash `printf > /dev/portapack` path that empirically
+    transitions the Portapack. Baud/framing tests removed — no longer applicable.
+    """
 
-    def test_8n1_framing(self):
-        """D-05 - 8N1 framing (EIGHTBITS / PARITY_NONE / STOPBITS_ONE)."""
+    def test_uses_raw_os_open(self):
+        """D-05 - helper opens the device via os.open with O_WRONLY|O_NOCTTY."""
         src = _read_source()
-        assert 'bytesize=serial.EIGHTBITS' in src
-        assert 'parity=serial.PARITY_NONE' in src
-        assert 'stopbits=serial.STOPBITS_ONE' in src
+        assert 'os.open(device_path' in src
+        assert 'O_WRONLY' in src
+        assert 'O_NOCTTY' in src
+
+    def test_no_pyserial_import(self):
+        """D-05 - pyserial is no longer imported in the production module."""
+        src = _read_source()
+        assert '\nimport serial\n' not in src
+        assert '\nfrom serial ' not in src
 
     def test_command_is_hackrf_newline(self):
         """D-05 - PORTAPACK_COMMAND defined; b'hackrf\\n' only appears via constant."""
@@ -508,18 +511,18 @@ class TestSerialParams:
             "b'hackrf\\n' must only appear in the PORTAPACK_COMMAND definition")
 
     def test_dtr_settle_before_write(self):
-        """A3 / Pitfall 1 - time.sleep(PORTAPACK_DTR_SETTLE_S) precedes port.write."""
+        """A3 / Pitfall 1 - time.sleep(PORTAPACK_DTR_SETTLE_S) precedes os.write."""
         tree = _parse_source()
         fn = _find_function(
             tree, '_portapack_send_hackrf_command', class_name='HackRFLifecycleNode')
         assert fn is not None, '_portapack_send_hackrf_command not found'
         fn_text = ast.unparse(fn)
         sleep_idx = fn_text.find('time.sleep(PORTAPACK_DTR_SETTLE_S)')
-        write_idx = fn_text.find('.write(')
+        write_idx = fn_text.find('os.write(')
         assert sleep_idx != -1, 'time.sleep(PORTAPACK_DTR_SETTLE_S) missing'
-        assert write_idx != -1, '.write( call missing in send_hackrf_command'
+        assert write_idx != -1, 'os.write( call missing in send_hackrf_command'
         assert sleep_idx < write_idx, (
-            'DTR settle sleep must precede the first .write() call')
+            'DTR settle sleep must precede the os.write() call')
 
 
 # ===========================================================================
@@ -590,35 +593,35 @@ class TestIntegrationPoint:
 # 10. TestTransitionSequence - D-06 happy path (Pattern B)
 # ===========================================================================
 class TestTransitionSequence:
-    """Mocked end-to-end happy path through _transition_portapack (D-06)."""
+    """Mocked end-to-end happy path through _transition_portapack (D-06).
 
-    def _make_serial_mock(self, write_recorder):
-        """Return a MagicMock configured to record port.write() calls."""
-        serial_mock = MagicMock()
-        port_mock = MagicMock()
-        port_mock.write = write_recorder
-        port_mock.__enter__ = MagicMock(return_value=port_mock)
-        port_mock.__exit__ = MagicMock(return_value=False)
-        serial_mock.return_value = port_mock
-        return serial_mock
+    Mocks os.open + os.write after the HIL-driven pyserial → raw-fd switch.
+    """
 
     def test_happy_path_returns_succeeded(self):
-        """D-06 - symlink present + serial write OK + enumerate non-empty → SUCCEEDED."""
+        """D-06 - symlink present + write OK + enumerate non-empty → SUCCEEDED."""
         node, mod = _make_node()
-        write_recorder = MagicMock()
-        serial_mock = self._make_serial_mock(write_recorder)
+        open_mock = MagicMock(return_value=42)  # fake fd
+        write_mock = MagicMock(return_value=len(mod.PORTAPACK_COMMAND))
+        close_mock = MagicMock()
         import pyhackrf2 as pk
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.write', write_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.close', close_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.time.sleep', lambda *_: None), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists',
                    side_effect=lambda p: p == mod.PORTAPACK_DEFAULT_DEVICE), \
              patch.object(pk.HackRF, 'enumerate', classmethod(lambda cls: ['abc'])):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.SUCCEEDED
-        assert serial_mock.call_count == 1
-        _, kwargs = serial_mock.call_args
-        assert kwargs.get('baudrate') == 115200
-        write_recorder.assert_called_with(mod.PORTAPACK_COMMAND)
+        assert open_mock.call_count == 1
+        # Ensure the file was opened with O_WRONLY|O_NOCTTY (raw, no termios).
+        _, kwargs = open_mock.call_args
+        flags = open_mock.call_args[0][1]
+        assert flags & os.O_WRONLY, 'expected O_WRONLY in os.open flags'
+        assert flags & os.O_NOCTTY, 'expected O_NOCTTY in os.open flags'
+        write_mock.assert_called_once_with(42, mod.PORTAPACK_COMMAND)
+        close_mock.assert_called_once_with(42)
 
 
 # ===========================================================================
@@ -628,115 +631,121 @@ class TestSkipPath:
     """When Portapack cannot or should not be transitioned, helper returns SKIPPED."""
 
     def test_no_symlink_skips(self):
-        """D-07 - /dev/portapack absent → SKIPPED, no serial or enumerate calls."""
+        """D-07 - /dev/portapack absent → SKIPPED, no os.open or enumerate calls."""
         node, mod = _make_node()
-        serial_mock = MagicMock()
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        open_mock = MagicMock()
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=False):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.SKIPPED
-        assert serial_mock.call_count == 0
+        assert open_mock.call_count == 0
 
     def test_disabled_skips(self):
-        """D-07 - portapack_enable_transition=False → SKIPPED, no serial call."""
+        """D-07 - portapack_enable_transition=False → SKIPPED, no os.open call."""
         node, mod = _make_node(portapack_enable_transition=False)
-        serial_mock = MagicMock()
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        open_mock = MagicMock()
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=True):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.SKIPPED
-        assert serial_mock.call_count == 0
+        assert open_mock.call_count == 0
 
     def test_empty_device_skips(self):
-        """D-07 - portapack_serial_device='' → SKIPPED, no serial call."""
+        """D-07 - portapack_serial_device='' → SKIPPED, no os.open call."""
         node, mod = _make_node(portapack_serial_device='')
-        serial_mock = MagicMock()
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        open_mock = MagicMock()
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=True):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.SKIPPED
-        assert serial_mock.call_count == 0
+        assert open_mock.call_count == 0
 
 
 # ===========================================================================
 # 12. TestSerialRaise - D-08 (REQ-P5-08)
 # ===========================================================================
 class TestSerialRaise:
-    """Serial-open failures fall through as SKIPPED with ERROR log (D-08)."""
+    """Open/write failures fall through as SKIPPED with ERROR log (D-08)."""
 
-    def test_serial_exception_falls_through(self):
-        """D-08 - serial.SerialException → SKIPPED, ERROR logged."""
-        import serial as pyserial
+    def test_open_oserror_falls_through(self):
+        """D-08 - OSError(ENOENT) on os.open → SKIPPED, ERROR logged."""
         node, mod = _make_node()
-        serial_mock = MagicMock(side_effect=pyserial.SerialException('stale'))
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        open_mock = MagicMock(side_effect=OSError(errno.ENOENT, 'no node'))
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=True):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.SKIPPED
-        assert node._logger.error.called, 'must log ERROR on serial failure'
+        assert node._logger.error.called, 'must log ERROR on open failure'
 
-    def test_oserror_falls_through(self):
-        """D-08 - OSError(ENOENT) → SKIPPED (stale symlink case)."""
+    def test_write_oserror_falls_through(self):
+        """D-08 - OSError on os.write → SKIPPED (stale symlink case), fd closed."""
         node, mod = _make_node()
-        serial_mock = MagicMock(side_effect=OSError(errno.ENOENT, 'no node'))
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        open_mock = MagicMock(return_value=42)
+        write_mock = MagicMock(side_effect=OSError(errno.EIO, 'io error'))
+        close_mock = MagicMock()
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.write', write_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.close', close_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.time.sleep', lambda *_: None), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=True):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.SKIPPED
+        assert close_mock.called, 'fd must be closed even when write raises'
 
 
 # ===========================================================================
 # 13. TestResendPath - D-09 (REQ-P5-09)
 # ===========================================================================
 class TestResendPath:
-    """Resend-after-timeout and both-attempts-exhausted paths (D-09)."""
+    """Resend-after-timeout and both-attempts-exhausted paths (D-09).
 
-    def _serial_ok(self, write_recorder=None):
-        """Build a serial.Serial mock that succeeds and records writes."""
-        serial_mock = MagicMock()
-        port_mock = MagicMock()
-        port_mock.write = write_recorder or MagicMock()
-        port_mock.__enter__ = MagicMock(return_value=port_mock)
-        port_mock.__exit__ = MagicMock(return_value=False)
-        serial_mock.return_value = port_mock
-        return serial_mock
+    HIL data (2026-04-18) confirmed this is the real cold-start case: Mayhem
+    drops the first write every time; the second write succeeds. Production
+    cycle is therefore: os.open → write → close → poll → os.open → write →
+    close → poll → enumerate finds hackrf → RETRIED.
+    """
 
     def test_retried_on_second_attempt(self):
-        """D-09 - first poll empty, second poll finds HackRF → RETRIED (2 serial calls)."""
+        """D-09 - first poll empty, second poll finds HackRF → RETRIED (2 os.open calls)."""
         node, mod = _make_node(portapack_reenum_timeout_s=0.05)
-        serial_mock = self._serial_ok()
-        # Each _poll_hackrf_present call gets its own enumerate response.
-        # First poll: always empty (times out). Second poll: returns hardware.
+        open_mock = MagicMock(return_value=42)
+        write_mock = MagicMock()
+        close_mock = MagicMock()
 
         def fake_enumerate(cls):
-            # Each call to enumerate counts once; after first call in second
-            # poll, return present. Use serial.Serial call count as the
-            # attempt discriminator.
-            if serial_mock.call_count <= 1:
+            # Each call to enumerate counts once; return [] until after the
+            # second os.open (second attempt in the resend path), then present.
+            if open_mock.call_count <= 1:
                 return []
             return ['abc']
         import pyhackrf2 as pk
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.write', write_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.close', close_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.time.sleep', lambda *_: None), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=True), \
              patch.object(pk.HackRF, 'enumerate', classmethod(fake_enumerate)):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.RETRIED
-        assert serial_mock.call_count == 2, (
-            f'serial.Serial expected 2 calls, got {serial_mock.call_count}')
+        assert open_mock.call_count == 2, (
+            f'os.open expected 2 calls, got {open_mock.call_count}')
 
     def test_failed_when_both_attempts_exhausted(self):
-        """D-09 - HackRF never appears → FAILED; serial.Serial called twice."""
+        """D-09 - HackRF never appears → FAILED; os.open called twice."""
         node, mod = _make_node(portapack_reenum_timeout_s=0.05)
-        serial_mock = self._serial_ok()
+        open_mock = MagicMock(return_value=42)
+        write_mock = MagicMock()
+        close_mock = MagicMock()
         import pyhackrf2 as pk
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.write', write_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.close', close_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.time.sleep', lambda *_: None), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=True), \
              patch.object(pk.HackRF, 'enumerate', classmethod(lambda cls: [])):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.FAILED
-        assert serial_mock.call_count == 2
+        assert open_mock.call_count == 2
 
 
 # ===========================================================================
@@ -803,13 +812,13 @@ class TestDiagField:
     def test_value_after_failed(self):
         """D-11 - after FAILED transition, state reflects 'failed' value."""
         node, mod = _make_node(portapack_reenum_timeout_s=0.05)
-        serial_mock = MagicMock()
-        port_mock = MagicMock()
-        port_mock.__enter__ = MagicMock(return_value=port_mock)
-        port_mock.__exit__ = MagicMock(return_value=False)
-        serial_mock.return_value = port_mock
+        open_mock = MagicMock(return_value=42)
+        write_mock = MagicMock()
+        close_mock = MagicMock()
         import pyhackrf2 as pk
-        with patch('hackrf_ros.hackrf_lifecycle_node.serial.Serial', serial_mock), \
+        with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.write', write_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.os.close', close_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.time.sleep', lambda *_: None), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=True), \
              patch.object(pk.HackRF, 'enumerate', classmethod(lambda cls: [])):

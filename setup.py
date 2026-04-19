@@ -24,7 +24,7 @@ setup(
             'config/hackrf_radio_1.yaml',
         ]),
     ],
-    install_requires=['setuptools', 'scipy>=1.11', 'pyserial>=3.5'],
+    install_requires=['setuptools', 'scipy>=1.11'],
     zip_safe=True,
     maintainer='root',
     maintainer_email='root@localhost',
