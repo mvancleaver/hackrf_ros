@@ -440,11 +440,19 @@ class HackRFLifecycleNode(LifecycleNode):
             ParameterDescriptor(description=(
                 'Master off-switch for the Portapack Mayhem->HackRF mode transition.')))
         self.declare_parameter('portapack_reenum_timeout_s', PORTAPACK_DEFAULT_REENUM_TIMEOUT_S,
-            ParameterDescriptor(description=(
-                'Per-attempt USB re-enumeration timeout (seconds) after sending hackrf command.')))
+            ParameterDescriptor(
+                description=(
+                    'Per-attempt USB re-enumeration timeout (seconds) after '
+                    'sending hackrf command.'),
+                floating_point_range=[FloatingPointRange(
+                    from_value=0.5, to_value=30.0, step=0.0)]))
         self.declare_parameter('portapack_open_retries', PORTAPACK_DEFAULT_OPEN_RETRIES,
-            ParameterDescriptor(description=(
-                'Retries when opening HackRF after re-enumeration (250 ms spacing, D-10).')))
+            ParameterDescriptor(
+                description=(
+                    'Retries when opening HackRF after re-enumeration '
+                    '(250 ms spacing, D-10).'),
+                integer_range=[IntegerRange(
+                    from_value=1, to_value=10, step=1)]))
 
     # ------------------------------------------------------------------
     # Portapack boot transition (Phase 5, D-05..D-11, D-16)
