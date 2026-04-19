@@ -42,7 +42,8 @@ Reliable, calibrated RF spectrum awareness published as standard ROS2 messages t
 ### Out of Scope
 
 - TX transmission — removed during rescope, separate safety concern
-- Mayhem firmware serial control — separate package (pymayhem)
+- Mayhem mode-switch command (exit Mayhem UI → HackRF USB-SDR) — in-package since Phase 5 (bounded scope per CONTEXT.md D-00)
+- All other Mayhem firmware control (UI navigation, app launch, DFU, file transfer, TX apps) — still separate package concern (pymayhem)
 - Redis IQ streaming — replaced by ROS2 topics
 - GUI applications — display nodes are optional subscribers, not core
 
