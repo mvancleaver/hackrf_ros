@@ -5,7 +5,11 @@ services:
       dockerfile: Dockerfile
     container_name: hackrf_ros
     network_mode: host
-    privileged: true
+    # Access surface (WR-04): privileged removed — the cgroup rules below are
+    # the load-bearing ACL for USB (HackRF) and CDC-ACM (Portapack). The
+    # /dev:/dev bind is needed so the /dev/portapack udev symlink is visible
+    # inside the container. Do NOT re-add `privileged: true` without first
+    # deleting the cgroup rules; otherwise the access surface becomes opaque.
     devices:
       - /dev/bus/usb:/dev/bus/usb
     device_cgroup_rules:
@@ -17,6 +21,6 @@ services:
       - QT_X11_NO_MITSHM=1
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - /dev:/dev
+      - /dev:/dev       # needed for /dev/portapack udev symlink visibility
     tty: true
     command: ros2 launch hackrf_ros hackrf.launch.py
