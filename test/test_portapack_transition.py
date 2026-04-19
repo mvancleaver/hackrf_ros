@@ -599,7 +599,7 @@ class TestTransitionSequence:
     """
 
     def test_happy_path_returns_succeeded(self):
-        """D-06 - symlink present + write OK + enumerate non-empty → SUCCEEDED."""
+        """D-06 - burst of writes + enumerate non-empty → SUCCEEDED (first attempt)."""
         node, mod = _make_node()
         open_mock = MagicMock(return_value=42)  # fake fd
         write_mock = MagicMock(return_value=len(mod.PORTAPACK_COMMAND))
@@ -614,14 +614,15 @@ class TestTransitionSequence:
              patch.object(pk.HackRF, 'enumerate', classmethod(lambda cls: ['abc'])):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.SUCCEEDED
-        assert open_mock.call_count == 1
+        # Burst of N writes per attempt (first attempt succeeds, no resend).
+        assert open_mock.call_count == mod.PORTAPACK_WRITES_PER_ATTEMPT
         # Ensure the file was opened with O_WRONLY|O_NOCTTY (raw, no termios).
-        _, kwargs = open_mock.call_args
         flags = open_mock.call_args[0][1]
         assert flags & os.O_WRONLY, 'expected O_WRONLY in os.open flags'
         assert flags & os.O_NOCTTY, 'expected O_NOCTTY in os.open flags'
-        write_mock.assert_called_once_with(42, mod.PORTAPACK_COMMAND)
-        close_mock.assert_called_once_with(42)
+        assert write_mock.call_count == mod.PORTAPACK_WRITES_PER_ATTEMPT
+        write_mock.assert_called_with(42, mod.PORTAPACK_COMMAND)
+        assert close_mock.call_count == mod.PORTAPACK_WRITES_PER_ATTEMPT
 
 
 # ===========================================================================
@@ -668,10 +669,11 @@ class TestSerialRaise:
     """Open/write failures fall through as SKIPPED with ERROR log (D-08)."""
 
     def test_open_oserror_falls_through(self):
-        """D-08 - OSError(ENOENT) on os.open → SKIPPED, ERROR logged."""
+        """D-08 - OSError(ENOENT) on os.open (all burst cycles) → SKIPPED, ERROR logged."""
         node, mod = _make_node()
         open_mock = MagicMock(side_effect=OSError(errno.ENOENT, 'no node'))
         with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
+             patch('hackrf_ros.hackrf_lifecycle_node.time.sleep', lambda *_: None), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.path.exists', return_value=True):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.SKIPPED
@@ -706,16 +708,21 @@ class TestResendPath:
     """
 
     def test_retried_on_second_attempt(self):
-        """D-09 - first poll empty, second poll finds HackRF → RETRIED (2 os.open calls)."""
+        """D-09 - first poll empty, second poll finds HackRF → RETRIED.
+
+        Each attempt bursts PORTAPACK_WRITES_PER_ATTEMPT open cycles, so 2
+        attempts = 2 * N os.open calls.
+        """
         node, mod = _make_node(portapack_reenum_timeout_s=0.05)
         open_mock = MagicMock(return_value=42)
         write_mock = MagicMock()
         close_mock = MagicMock()
+        burst = mod.PORTAPACK_WRITES_PER_ATTEMPT
 
         def fake_enumerate(cls):
-            # Each call to enumerate counts once; return [] until after the
-            # second os.open (second attempt in the resend path), then present.
-            if open_mock.call_count <= 1:
+            # First attempt (N opens) → poll sees []. Second attempt (N more
+            # opens) → poll sees hackrf. Use open call count as attempt marker.
+            if open_mock.call_count <= burst:
                 return []
             return ['abc']
         import pyhackrf2 as pk
@@ -727,15 +734,17 @@ class TestResendPath:
              patch.object(pk.HackRF, 'enumerate', classmethod(fake_enumerate)):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.RETRIED
-        assert open_mock.call_count == 2, (
-            f'os.open expected 2 calls, got {open_mock.call_count}')
+        assert open_mock.call_count == 2 * burst, (
+            f'os.open expected {2 * burst} calls (2 attempts x {burst} burst), '
+            f'got {open_mock.call_count}')
 
     def test_failed_when_both_attempts_exhausted(self):
-        """D-09 - HackRF never appears → FAILED; os.open called twice."""
+        """D-09 - HackRF never appears → FAILED; burst × 2 os.open calls."""
         node, mod = _make_node(portapack_reenum_timeout_s=0.05)
         open_mock = MagicMock(return_value=42)
         write_mock = MagicMock()
         close_mock = MagicMock()
+        burst = mod.PORTAPACK_WRITES_PER_ATTEMPT
         import pyhackrf2 as pk
         with patch('hackrf_ros.hackrf_lifecycle_node.os.open', open_mock), \
              patch('hackrf_ros.hackrf_lifecycle_node.os.write', write_mock), \
@@ -745,7 +754,7 @@ class TestResendPath:
              patch.object(pk.HackRF, 'enumerate', classmethod(lambda cls: [])):
             result = node._transition_portapack()
         assert result == mod.PortapackTransitionResult.FAILED
-        assert open_mock.call_count == 2
+        assert open_mock.call_count == 2 * burst
 
 
 # ===========================================================================

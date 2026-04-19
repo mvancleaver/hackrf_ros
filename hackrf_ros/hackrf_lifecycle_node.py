@@ -15,6 +15,7 @@ Lifecycle:
 from __future__ import annotations
 
 import enum
+import errno
 import os
 import queue
 import threading
@@ -84,6 +85,8 @@ PORTAPACK_DTR_SETTLE_S = 0.05        # CDC-ACM DTR/RTS settle (Pitfall 1, A3)
 PORTAPACK_POLL_INTERVAL_S = 0.1      # re-enumeration probe cadence
 PORTAPACK_OPEN_RETRY_DELAY_S = 0.25  # D-10 USB kernel-claim race
 PORTAPACK_COMMAND = b'hackrf\n'      # Mayhem USB-serial mode-switch — LF (A2 HIL-resolved 2026-04-18: either terminator works provided the DTR settle precedes the write; LF is standard)
+PORTAPACK_WRITES_PER_ATTEMPT = 3     # Mayhem cold-start eats the first 1-3 writes non-deterministically; burst per attempt for reliability (HIL-resolved 2026-04-18)
+PORTAPACK_INTER_WRITE_DELAY_S = 0.25  # gap between writes in a burst
 
 
 class PortapackTransitionResult(enum.Enum):
@@ -448,39 +451,58 @@ class HackRFLifecycleNode(LifecycleNode):
     # ------------------------------------------------------------------
 
     def _portapack_send_hackrf_command(self, device_path: str) -> bool:
-        """Open /dev/portapack raw, write 'hackrf\\n', close. Return True on success.
+        """Burst-write 'hackrf\\n' to /dev/portapack. Return True if at least
+        one write succeeded.
 
         Uses os.open(O_WRONLY|O_NOCTTY) instead of pyserial. HIL testing on
-        live Mayhem hardware (Phase 5 UAT, 2026-04-18) showed that pyserial's
-        Serial() constructor triggers termios/DTR behavior that causes Mayhem
-        to drop the command reliably. Raw file I/O matches the bash
-        `printf > /dev/portapack` pattern that empirically works. Mayhem
-        accepts the first or second attempt (D-09 retry covers cold-start
-        latency).
+        live Mayhem hardware (Phase 5 UAT, 2026-04-18) showed two things:
 
-        The PORTAPACK_DTR_SETTLE_S sleep is retained as insurance against
-        the kernel-level CDC-ACM DTR toggle on open.
+        1. pyserial's Serial() constructor triggers CDC-ACM termios behavior
+           that causes Mayhem to drop the command; raw os.open works.
+        2. On cold boot, Mayhem's serial handler non-deterministically drops
+           the first 1-3 writes. A single write per attempt is unreliable
+           even with a generous DTR settle. Burst of PORTAPACK_WRITES_PER_ATTEMPT
+           open-write-close cycles with PORTAPACK_INTER_WRITE_DELAY_S spacing
+           reliably delivers at least one command within one 5 s attempt.
+
+        Each cycle does a full open → settle → write → close so Mayhem sees
+        the same DTR cycle the bash `printf > /dev/portapack` pattern uses.
+        If the transition happens mid-burst, subsequent opens raise ENOENT
+        (symlink removed) — that's success, caller polls the HackRF.
 
         Never raises. Open/write failures are logged as ERROR per D-08.
         """
-        fd = None
-        try:
-            fd = os.open(device_path, os.O_WRONLY | os.O_NOCTTY)
-            # Pitfall 1: kernel may toggle DTR/RTS on CDC-ACM open even
-            # without termios. The settle absorbs the first few ms.
-            time.sleep(PORTAPACK_DTR_SETTLE_S)
-            os.write(fd, PORTAPACK_COMMAND)
-            return True
-        except OSError as exc:
+        any_success = False
+        last_exc: OSError | None = None
+        for attempt in range(PORTAPACK_WRITES_PER_ATTEMPT):
+            fd = None
+            try:
+                fd = os.open(device_path, os.O_WRONLY | os.O_NOCTTY)
+                # Pitfall 1: kernel may toggle DTR/RTS on CDC-ACM open even
+                # without termios. The settle absorbs the first few ms.
+                time.sleep(PORTAPACK_DTR_SETTLE_S)
+                os.write(fd, PORTAPACK_COMMAND)
+                any_success = True
+            except OSError as exc:
+                last_exc = exc
+                # Mid-burst ENOENT means the Portapack transitioned and the
+                # CDC-ACM node vanished — that's the success signal for the
+                # caller's poll. Stop the burst early.
+                if exc.errno == errno.ENOENT and any_success:
+                    # Mid-burst the device vanished — transition landed.
+                    return True
+            finally:
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+            if attempt + 1 < PORTAPACK_WRITES_PER_ATTEMPT:
+                time.sleep(PORTAPACK_INTER_WRITE_DELAY_S)
+        if not any_success and last_exc is not None:
             self.get_logger().error(
-                f'Portapack serial write failed on {device_path}: {exc}')
-            return False
-        finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+                f'Portapack serial write failed on {device_path}: {last_exc}')
+        return any_success
 
     def _poll_hackrf_present(self, timeout_s: float) -> bool:
         """Poll pyhackrf2.HackRF.enumerate() every PORTAPACK_POLL_INTERVAL_S
