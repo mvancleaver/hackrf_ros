@@ -401,6 +401,112 @@ class HackRFLifecycleNode(LifecycleNode):
         self.declare_parameter('antenna_z', 0.0,
             ParameterDescriptor(description='Antenna Z offset from parent_frame (m)'))
 
+        # Portapack boot transition parameters (Phase 5, D-12, D-14).
+        # NOT declared dynamic — a mid-run mode switch has no legitimate
+        # use case. Values are read once in on_configure.
+        self.declare_parameter('portapack_serial_device', PORTAPACK_DEFAULT_DEVICE,
+            ParameterDescriptor(description=(
+                'Path to Portapack CDC-ACM device (stable udev symlink). '
+                'Empty string disables the Mayhem->HackRF transition.')))
+        self.declare_parameter('portapack_enable_transition', PORTAPACK_DEFAULT_ENABLE,
+            ParameterDescriptor(description=(
+                'Master off-switch for the Portapack Mayhem->HackRF mode transition.')))
+        self.declare_parameter('portapack_reenum_timeout_s', PORTAPACK_DEFAULT_REENUM_TIMEOUT_S,
+            ParameterDescriptor(description=(
+                'Per-attempt USB re-enumeration timeout (seconds) after sending hackrf command.')))
+        self.declare_parameter('portapack_open_retries', PORTAPACK_DEFAULT_OPEN_RETRIES,
+            ParameterDescriptor(description=(
+                'Retries when opening HackRF after re-enumeration (250 ms spacing, D-10).')))
+
+    # ------------------------------------------------------------------
+    # Portapack boot transition (Phase 5, D-05..D-11, D-16)
+    # ------------------------------------------------------------------
+
+    def _portapack_send_hackrf_command(self, device_path: str) -> bool:
+        """Open /dev/portapack, write 'hackrf\\n', close. Return True on success.
+
+        Never raises. Serial open failures are logged as ERROR per D-08.
+        Handles the Linux CDC-ACM DTR/RTS toggle side-effect (Pitfall 1)
+        with a PORTAPACK_DTR_SETTLE_S sleep before write.
+        """
+        try:
+            with serial.Serial(
+                port=device_path,
+                baudrate=115200,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=1.0,
+                write_timeout=1.0,
+            ) as port:
+                # Pitfall 1: Linux unconditionally toggles DTR/RTS on CDC-ACM
+                # open. First bytes may be dropped without this settle.
+                time.sleep(PORTAPACK_DTR_SETTLE_S)
+                port.write(PORTAPACK_COMMAND)
+                port.flush()
+            return True
+        except (serial.SerialException, OSError) as exc:
+            self.get_logger().error(
+                f'Portapack serial write failed on {device_path}: {exc}')
+            return False
+
+    def _poll_hackrf_present(self, timeout_s: float) -> bool:
+        """Poll pyhackrf2.HackRF.enumerate() every PORTAPACK_POLL_INTERVAL_S
+        until a HackRF appears or timeout elapses. Returns True on found.
+
+        Swallows transient libusb errors during re-enumeration (A5).
+        """
+        try:
+            from pyhackrf2 import HackRF
+        except ImportError:
+            self.get_logger().error('pyhackrf2 not installed - cannot probe.')
+            return False
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                serials = HackRF.enumerate()  # classmethod, list[str]
+                if serials:
+                    return True
+            except Exception as exc:  # libusb may transiently raise
+                self.get_logger().debug(
+                    f'HackRF.enumerate transient error (likely during re-enum): {exc}')
+            time.sleep(PORTAPACK_POLL_INTERVAL_S)
+        return False
+
+    def _transition_portapack(self) -> PortapackTransitionResult:
+        """Drive Portapack from Mayhem UI -> HackRF USB-SDR mode.
+
+        Never raises (Pitfall 2 - raising from on_configure sends the node
+        to ErrorProcessing/FINALIZED which is near-terminal). All errors
+        are classified and returned as a PortapackTransitionResult.
+        Implements D-05..D-11, D-16 and consumes the four D-12 parameters.
+        """
+        enable = bool(self.get_parameter('portapack_enable_transition').value)
+        device = str(self.get_parameter('portapack_serial_device').value)
+        if not enable or not device or not os.path.exists(device):
+            return PortapackTransitionResult.SKIPPED
+
+        timeout_s = float(self.get_parameter('portapack_reenum_timeout_s').value)
+
+        # Attempt 1 (D-06).
+        if not self._portapack_send_hackrf_command(device):
+            # D-08: serial open failed - stale symlink most likely. Fall
+            # through to pyhackrf2.open; do NOT mark FAILED.
+            return PortapackTransitionResult.SKIPPED
+        if self._poll_hackrf_present(timeout_s):
+            return PortapackTransitionResult.SUCCEEDED
+
+        # Attempt 2 (D-09). Resend and poll once more.
+        self.get_logger().warning(
+            'Portapack did not re-enumerate within '
+            f'{timeout_s:.1f}s - resending hackrf command.')
+        if not self._portapack_send_hackrf_command(device):
+            return PortapackTransitionResult.FAILED
+        if self._poll_hackrf_present(timeout_s):
+            return PortapackTransitionResult.RETRIED
+
+        return PortapackTransitionResult.FAILED
+
     def _param_callback(self, params: list[Parameter]) -> SetParametersResult:
         """Validate params and enqueue hardware application (REL-02).
 
