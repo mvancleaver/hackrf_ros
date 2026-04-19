@@ -14,12 +14,15 @@ Lifecycle:
 """
 from __future__ import annotations
 
+import enum
+import os
 import queue
 import threading
 import time
 
 import numpy as np
 import scipy.fft
+import serial
 
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
@@ -73,6 +76,25 @@ AGC_QUIET_CYCLES = 30   # consecutive clip-free cycles before recovering gain
 DISCONNECT_ERROR_TIMEOUT = 2.0   # seconds before USB fault escalates WARN -> ERROR
 
 
+# Portapack boot transition (Phase 5, D-12, D-13, A3). REQ-P5-05..16.
+PORTAPACK_DEFAULT_DEVICE = '/dev/portapack'
+PORTAPACK_DEFAULT_ENABLE = True
+PORTAPACK_DEFAULT_REENUM_TIMEOUT_S = 5.0
+PORTAPACK_DEFAULT_OPEN_RETRIES = 3
+PORTAPACK_DTR_SETTLE_S = 0.05        # CDC-ACM DTR/RTS settle (Pitfall 1, A3)
+PORTAPACK_POLL_INTERVAL_S = 0.1      # re-enumeration probe cadence
+PORTAPACK_OPEN_RETRY_DELAY_S = 0.25  # D-10 USB kernel-claim race
+PORTAPACK_COMMAND = b'hackrf\n'      # Mayhem USB-serial mode-switch command
+
+
+class PortapackTransitionResult(enum.Enum):
+    """Outcome of _transition_portapack(). See RESEARCH.md §Pattern 3."""
+    SKIPPED = 'skipped'
+    SUCCEEDED = 'succeeded'
+    RETRIED = 'retried'
+    FAILED = 'failed'
+
+
 class HackRFLifecycleNode(LifecycleNode):
     """ROS2 lifecycle node for HackRF One SDR."""
 
@@ -94,6 +116,11 @@ class HackRFLifecycleNode(LifecycleNode):
         self._last_rx_time: float = 0.0
         self._rx_overflow_count = 0
         self._clip_count = 0
+
+        # Portapack boot transition state (D-11, D-15). Initial value
+        # matches the SKIPPED case so diagnostics reports a sensible
+        # default before on_configure has run.
+        self._last_portapack_transition = PortapackTransitionResult.SKIPPED.value
 
         # AGC state (REL-01)
         self._agc_hold_counter: int = 0
@@ -136,16 +163,42 @@ class HackRFLifecycleNode(LifecycleNode):
         self.get_logger().info('Configuring...')
         self._declare_parameters()
 
+        # Phase 5 - Portapack boot transition (D-11, D-16). Helper never
+        # raises; on FAILED we return FAILURE (stays in UNCONFIGURED;
+        # retryable via trigger_configure) instead of raising (which
+        # would send the node to ErrorProcessing - Pitfall 2).
+        transition_result = self._transition_portapack()
+        self._last_portapack_transition = transition_result.value
+        if transition_result == PortapackTransitionResult.FAILED:
+            self.get_logger().error(
+                'Portapack transition failed - power-cycle the Portapack '
+                'and retry configure.')
+            return TransitionCallbackReturn.FAILURE
+
         try:
             import pyhackrf2
-            device_index = int(self.get_parameter('device_index').value)
-            self._hackrf = pyhackrf2.HackRF(device_index=device_index)
         except ImportError:
             self.get_logger().error('pyhackrf2 not installed.')
             return TransitionCallbackReturn.FAILURE
-        except (RuntimeError, OSError) as e:
+
+        device_index = int(self.get_parameter('device_index').value)
+        retries = max(1, int(self.get_parameter('portapack_open_retries').value))
+        last_exc: Exception | None = None
+        self._hackrf = None
+        # D-10 - retry loop absorbs the USB kernel-claim race window
+        # between re-enumeration and libhackrf device-handle cache update.
+        for attempt in range(retries):
+            try:
+                self._hackrf = pyhackrf2.HackRF(device_index=device_index)
+                break
+            except (RuntimeError, OSError) as e:
+                last_exc = e
+                if attempt + 1 < retries:
+                    time.sleep(PORTAPACK_OPEN_RETRY_DELAY_S)
+        if self._hackrf is None:
             self.get_logger().error(
-                f'Failed to open HackRF at device_index={device_index}: {e}')
+                f'Failed to open HackRF at device_index={device_index} '
+                f'after {retries} attempts: {last_exc}')
             return TransitionCallbackReturn.FAILURE
 
         self._apply_params_to_device()
@@ -373,6 +426,112 @@ class HackRFLifecycleNode(LifecycleNode):
             ParameterDescriptor(description='Antenna Y offset from parent_frame (m)'))
         self.declare_parameter('antenna_z', 0.0,
             ParameterDescriptor(description='Antenna Z offset from parent_frame (m)'))
+
+        # Portapack boot transition parameters (Phase 5, D-12, D-14).
+        # NOT declared dynamic — a mid-run mode switch has no legitimate
+        # use case. Values are read once in on_configure.
+        self.declare_parameter('portapack_serial_device', PORTAPACK_DEFAULT_DEVICE,
+            ParameterDescriptor(description=(
+                'Path to Portapack CDC-ACM device (stable udev symlink). '
+                'Empty string disables the Mayhem->HackRF transition.')))
+        self.declare_parameter('portapack_enable_transition', PORTAPACK_DEFAULT_ENABLE,
+            ParameterDescriptor(description=(
+                'Master off-switch for the Portapack Mayhem->HackRF mode transition.')))
+        self.declare_parameter('portapack_reenum_timeout_s', PORTAPACK_DEFAULT_REENUM_TIMEOUT_S,
+            ParameterDescriptor(description=(
+                'Per-attempt USB re-enumeration timeout (seconds) after sending hackrf command.')))
+        self.declare_parameter('portapack_open_retries', PORTAPACK_DEFAULT_OPEN_RETRIES,
+            ParameterDescriptor(description=(
+                'Retries when opening HackRF after re-enumeration (250 ms spacing, D-10).')))
+
+    # ------------------------------------------------------------------
+    # Portapack boot transition (Phase 5, D-05..D-11, D-16)
+    # ------------------------------------------------------------------
+
+    def _portapack_send_hackrf_command(self, device_path: str) -> bool:
+        """Open /dev/portapack, write 'hackrf\\n', close. Return True on success.
+
+        Never raises. Serial open failures are logged as ERROR per D-08.
+        Handles the Linux CDC-ACM DTR/RTS toggle side-effect (Pitfall 1)
+        with a PORTAPACK_DTR_SETTLE_S sleep before write.
+        """
+        try:
+            with serial.Serial(
+                port=device_path,
+                baudrate=115200,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=1.0,
+                write_timeout=1.0,
+            ) as port:
+                # Pitfall 1: Linux unconditionally toggles DTR/RTS on CDC-ACM
+                # open. First bytes may be dropped without this settle.
+                time.sleep(PORTAPACK_DTR_SETTLE_S)
+                port.write(PORTAPACK_COMMAND)
+                port.flush()
+            return True
+        except (serial.SerialException, OSError) as exc:
+            self.get_logger().error(
+                f'Portapack serial write failed on {device_path}: {exc}')
+            return False
+
+    def _poll_hackrf_present(self, timeout_s: float) -> bool:
+        """Poll pyhackrf2.HackRF.enumerate() every PORTAPACK_POLL_INTERVAL_S
+        until a HackRF appears or timeout elapses. Returns True on found.
+
+        Swallows transient libusb errors during re-enumeration (A5).
+        """
+        try:
+            from pyhackrf2 import HackRF
+        except ImportError:
+            self.get_logger().error('pyhackrf2 not installed - cannot probe.')
+            return False
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                serials = HackRF.enumerate()  # classmethod, list[str]
+                if serials:
+                    return True
+            except Exception as exc:  # libusb may transiently raise
+                self.get_logger().debug(
+                    f'HackRF.enumerate transient error (likely during re-enum): {exc}')
+            time.sleep(PORTAPACK_POLL_INTERVAL_S)
+        return False
+
+    def _transition_portapack(self) -> PortapackTransitionResult:
+        """Drive Portapack from Mayhem UI -> HackRF USB-SDR mode.
+
+        Never raises (Pitfall 2 - raising from on_configure sends the node
+        to ErrorProcessing/FINALIZED which is near-terminal). All errors
+        are classified and returned as a PortapackTransitionResult.
+        Implements D-05..D-11, D-16 and consumes the four D-12 parameters.
+        """
+        enable = bool(self.get_parameter('portapack_enable_transition').value)
+        device = str(self.get_parameter('portapack_serial_device').value)
+        if not enable or not device or not os.path.exists(device):
+            return PortapackTransitionResult.SKIPPED
+
+        timeout_s = float(self.get_parameter('portapack_reenum_timeout_s').value)
+
+        # Attempt 1 (D-06).
+        if not self._portapack_send_hackrf_command(device):
+            # D-08: serial open failed - stale symlink most likely. Fall
+            # through to pyhackrf2.open; do NOT mark FAILED.
+            return PortapackTransitionResult.SKIPPED
+        if self._poll_hackrf_present(timeout_s):
+            return PortapackTransitionResult.SUCCEEDED
+
+        # Attempt 2 (D-09). Resend and poll once more.
+        self.get_logger().warning(
+            'Portapack did not re-enumerate within '
+            f'{timeout_s:.1f}s - resending hackrf command.')
+        if not self._portapack_send_hackrf_command(device):
+            return PortapackTransitionResult.FAILED
+        if self._poll_hackrf_present(timeout_s):
+            return PortapackTransitionResult.RETRIED
+
+        return PortapackTransitionResult.FAILED
 
     def _param_callback(self, params: list[Parameter]) -> SetParametersResult:
         """Validate params and enqueue hardware application (REL-02).
@@ -916,6 +1075,8 @@ class HackRFLifecycleNode(LifecycleNode):
         stat.add('adc_clips', str(self._clip_count))
         stat.add('usb_fault', str(self._usb_fault).lower())
         stat.add('agc_last_action', self._agc_last_action)
+        # D-15 - Portapack boot transition outcome from most recent configure.
+        stat.add('last_portapack_transition', self._last_portapack_transition)
         if self._activate_time is not None:
             stat.add('uptime_s', f'{now - self._activate_time:.1f}')
         return stat

@@ -5,3 +5,8 @@ hackrf_node:
     lna_gain: 32
     vga_gain: 40
     amp_enabled: true
+    # Portapack boot transition (Phase 5, D-12). Uncomment to override.
+    # portapack_serial_device: /dev/portapack   # empty string disables transition
+    # portapack_enable_transition: true
+    # portapack_reenum_timeout_s: 5.0
+    # portapack_open_retries: 3
