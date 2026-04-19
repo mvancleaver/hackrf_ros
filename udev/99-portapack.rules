@@ -1,0 +1,15 @@
+# /etc/udev/rules.d/99-portapack.rules (install target)
+# Phase 5 — REQ-P5-01, REQ-P5-02, REQ-P5-04. D-01, D-02, D-04.
+#
+# Stable symlink for the PortaPack Mayhem CDC-ACM serial interface.
+# VID 1d50 = Great Scott Gadgets / OpenMoko family (shared by HackRF).
+# PID 6018 = PortaPack Mayhem CDC-ACM  [ASSUMPTION A1 from RESEARCH.md —
+#            verify with `udevadm info -a -n /dev/ttyACM0` against live
+#            hardware before committing this file to deployment].
+#
+# When Mayhem exits to HackRF mode via the `hackrf` serial command, the
+# ACM interface disappears and the device re-enumerates as 1d50:6089
+# (HackRF One). That interface is handled by the existing libusb path
+# and does NOT need a udev rule here.
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", SYMLINK+="portapack", MODE="0666", GROUP="dialout"
