@@ -36,8 +36,13 @@ if [[ -z "$ACM_NODE" ]]; then
 else
     echo "=== Portapack VID:PID capture (A1 verification) ==="
     echo "Inspecting $ACM_NODE ..."
-    VENDOR="$(udevadm info -a -n "$ACM_NODE" 2>/dev/null | grep -m1 '{idVendor}' | sed -E 's/.*"([0-9a-f]+)".*/\1/')"
-    PRODUCT="$(udevadm info -a -n "$ACM_NODE" 2>/dev/null | grep -m1 '{idProduct}' | sed -E 's/.*"([0-9a-f]+)".*/\1/')"
+    # SIGPIPE guard: `grep -m1` closes the pipe early, which kills upstream
+    # udevadm via SIGPIPE (exit 141). `set -o pipefail` would propagate that
+    # and `set -e` would abort the script silently — so we wrap the command
+    # substitution in `|| true` to preserve the captured match.
+    UDEV_DUMP="$(udevadm info -a -n "$ACM_NODE" 2>/dev/null || true)"
+    VENDOR="$(printf '%s\n' "$UDEV_DUMP" | grep -m1 '{idVendor}' | sed -E 's/.*"([0-9a-f]+)".*/\1/' || true)"
+    PRODUCT="$(printf '%s\n' "$UDEV_DUMP" | grep -m1 '{idProduct}' | sed -E 's/.*"([0-9a-f]+)".*/\1/' || true)"
     echo "  idVendor=${VENDOR:-<missing>} idProduct=${PRODUCT:-<missing>}"
     if [[ "$VENDOR" == "1d50" && "$PRODUCT" == "6018" ]]; then
         echo "  ✓ matches expected Portapack Mayhem VID:PID (A1 CONFIRMED)"
