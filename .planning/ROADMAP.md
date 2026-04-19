@@ -16,6 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 2: Robot Autonomy Integration** - Action servers for sweep and IQ recording, plus RF occupancy grid for nav stack
 - [x] **Phase 3: Reliability** - AGC, async parameter retuning, and USB disconnect recovery to harden the runtime (completed 2026-04-13)
 - [x] **Phase 4: Advanced Signal Intelligence** - Wideband anomaly detection, emitter localization, cyclostationary features, and multi-radio architecture (completed 2026-04-13)
+- [ ] **Phase 5: Portapack Boot Transition** - Lifecycle node transitions the Portapack from Mayhem UI mode into HackRF USB-SDR mode on configure, with graceful fallback when Portapack is absent
 
 ## Phase Details
 
@@ -89,7 +90,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -97,3 +98,17 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 2. Robot Autonomy Integration | 1/4 | In Progress|  |
 | 3. Reliability | 3/3 | Complete   | 2026-04-13 |
 | 4. Advanced Signal Intelligence | 4/4 | Complete   | 2026-04-13 |
+| 5. Portapack Boot Transition | 0/4 | Planned | - |
+
+### Phase 5: Portapack Boot Transition
+
+**Goal:** Lifecycle node reliably transitions the Portapack from Mayhem UI mode into HackRF USB-SDR mode during `on_configure`, so `pyhackrf2.HackRF(...)` succeeds on a Portapack-equipped device at first launch, with graceful fallback when the Portapack serial interface is absent (plain HackRF or already-transitioned device)
+**Requirements**: REQ-P5-00, REQ-P5-01, REQ-P5-02, REQ-P5-03, REQ-P5-04, REQ-P5-05, REQ-P5-06, REQ-P5-07, REQ-P5-08, REQ-P5-09, REQ-P5-10, REQ-P5-11, REQ-P5-12, REQ-P5-13, REQ-P5-14, REQ-P5-15, REQ-P5-16, REQ-P5-A1, REQ-P5-A3
+**Depends on:** Phase 4
+**Plans:** 4 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Udev rule + docker-compose cgroup/bind + pyserial pip dep + host install script with A1 VID:PID capture
+- [ ] 05-02-PLAN.md — _transition_portapack helper, PortapackTransitionResult enum, 4 new ROS params, on_configure retry loop, diagnostics field, setup.py pyserial dep
+- [ ] 05-03-PLAN.md — PROJECT.md + REQUIREMENTS.md scope reversal (D-00) and minting of REQ-P5-00..REQ-P5-16 + REQ-P5-A1/REQ-P5-A3
+- [ ] 05-04-PLAN.md — test/test_portapack_transition.py full suite + scripts/hil_portapack_check.sh for A1/A2/A3 hardware verification
