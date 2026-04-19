@@ -674,7 +674,7 @@ For the planner: each failure mode below must map to at least one unit test OR o
 | Mayhem protocol | MEDIUM | Command name and prompt documented; line terminator and VID:PID are assumptions A1/A2 pending HIL |
 | Test strategy | HIGH | Matches existing test/*.py conventions exactly |
 
-### Open Questions (resolved via assumptions + HIL checkpoints)
+### Open Questions (RESOLVED)
 
 1. **Exact Portapack VID:PID** — handled via A1 hardware-verify task in plan
 2. **`\n` vs `\r\n`** — handled via A2; default `\n`, one-line change if HIL reveals otherwise
