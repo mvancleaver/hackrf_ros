@@ -41,25 +41,25 @@ fi
 # HIL test mirrors that production retry pattern — what passes here is
 # exactly what the production node does on a cold first-boot transition.
 _a2_send_once() {
+    # Raw O_WRONLY|O_NOCTTY — bypasses pyserial's termios init which
+    # empirically causes Mayhem to drop the command on Linux CDC-ACM.
+    # Bash `printf > /dev/portapack` uses exactly this path and works.
     python3 - <<'PY'
+import os
 import sys
 import time
+
 try:
-    import serial
-except ImportError:
-    print("A2: pyserial not installed. Run: pip install 'pyserial>=3.5'", file=sys.stderr)
+    fd = os.open('/dev/portapack', os.O_WRONLY | os.O_NOCTTY)
+except OSError as exc:
+    print(f"A2: os.open failed: {exc}", file=sys.stderr)
     sys.exit(2)
 
-with serial.Serial('/dev/portapack',
-                   baudrate=115200,
-                   bytesize=serial.EIGHTBITS,
-                   parity=serial.PARITY_NONE,
-                   stopbits=serial.STOPBITS_ONE,
-                   timeout=1.0,
-                   write_timeout=1.0) as port:
-    time.sleep(0.05)  # PORTAPACK_DTR_SETTLE_S — match production path
-    port.write(b'hackrf\n')
-    port.flush()
+try:
+    time.sleep(0.05)  # PORTAPACK_DTR_SETTLE_S equivalent
+    os.write(fd, b'hackrf\n')
+finally:
+    os.close(fd)
 PY
 }
 
