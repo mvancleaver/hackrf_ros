@@ -8,11 +8,15 @@ services:
     privileged: true
     devices:
       - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - 'c 189:* rmw'   # USB devices (HackRF at 1d50:6089, D-03, PITFALLS.md:535)
+      - 'c 166:* rmw'   # CDC-ACM (Portapack at 1d50:6018, D-03, PITFALLS.md:541)
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - DISPLAY=:1
       - QT_X11_NO_MITSHM=1
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev:/dev
     tty: true
     command: ros2 launch hackrf_ros hackrf.launch.py

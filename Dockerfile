@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rqt-plot \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir pyhackrf2 "numpy<2" matplotlib scipy sigmf
+RUN pip3 install --no-cache-dir pyhackrf2 "numpy<2" matplotlib scipy sigmf pyserial
 
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
