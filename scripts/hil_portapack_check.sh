@@ -33,26 +33,21 @@ else
     fail "A1 — observed ${VENDOR}:${PRODUCT} does not match 1d50:6018. Update udev/99-portapack.rules."
 fi
 
-# --- A2 — command terminator + DTR settle path are correct ---------------
-# A2 was HIL-resolved 2026-04-18: bash `printf > /dev/portapack` loses the
-# first write because CDC-ACM DTR toggles on open and Mayhem isn't ready to
-# read yet. The Python pyserial path in the production code waits
-# PORTAPACK_DTR_SETTLE_S (50 ms) between open and write, which reliably
-# delivers the command on first attempt. This HIL test exercises the
-# production path exactly — if it fails, the production node will too.
-if [[ ! -e /dev/portapack ]]; then
-    note "A2 skipped: /dev/portapack not present. Run scripts/install_portapack_udev.sh first."
-elif ! command -v python3 >/dev/null 2>&1; then
-    note "A2 skipped: python3 not on PATH. Install pyserial and retry."
-else
-    echo "A2: sending PORTAPACK_COMMAND via pyserial with 50 ms DTR settle ..."
-    if python3 - <<'PY'
+# --- A2 — command terminator + production retry path are correct ---------
+# A2 HIL-resolved 2026-04-18: Mayhem's CDC-ACM interface loses the first
+# write on every observed run (DTR toggle race or cold-start latency).
+# The production `_transition_portapack` helper already handles this via
+# D-09: if the first write+poll times out, resend and poll again. This
+# HIL test mirrors that production retry pattern — what passes here is
+# exactly what the production node does on a cold first-boot transition.
+_a2_send_once() {
+    python3 - <<'PY'
 import sys
 import time
 try:
     import serial
 except ImportError:
-    print("A2: pyserial not installed. Run: pip install 'pyserial>=3.5'")
+    print("A2: pyserial not installed. Run: pip install 'pyserial>=3.5'", file=sys.stderr)
     sys.exit(2)
 
 with serial.Serial('/dev/portapack',
@@ -66,22 +61,38 @@ with serial.Serial('/dev/portapack',
     port.write(b'hackrf\n')
     port.flush()
 PY
-    then
-        # Wait up to 5 s for the ACM node to disappear (transition completed).
-        A2_PASSED=0
-        for i in $(seq 1 50); do
-            if [[ ! -e "$NODE" ]]; then
-                pass "A2 — command accepted on first attempt; Mayhem exited after ${i}00 ms"
-                A2_PASSED=1
-                break
-            fi
-            sleep 0.1
-        done
-        if [[ "$A2_PASSED" == "0" ]]; then
-            fail "A2 — command written via pyserial+settle but ACM node still present after 5 s. Mayhem firmware may have regressed; try raising PORTAPACK_DTR_SETTLE_S."
+}
+
+_a2_wait_for_transition() {
+    # Poll every 100 ms up to 5 s for the ACM node to disappear.
+    local i
+    for i in $(seq 1 50); do
+        if [[ ! -e "$NODE" ]]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+if [[ ! -e /dev/portapack ]]; then
+    note "A2 skipped: /dev/portapack not present. Run scripts/install_portapack_udev.sh first."
+elif ! command -v python3 >/dev/null 2>&1; then
+    note "A2 skipped: python3 not on PATH. Install pyserial and retry."
+else
+    echo "A2: sending PORTAPACK_COMMAND via pyserial with 50 ms DTR settle (attempt 1/2) ..."
+    if _a2_send_once && _a2_wait_for_transition; then
+        pass "A2 — transitioned on first attempt"
+    elif [[ -e "$NODE" && -e /dev/portapack ]]; then
+        note "A2: first attempt did not trigger transition within 5 s — executing D-09 resend path."
+        echo "A2: resend via pyserial (attempt 2/2) ..."
+        if _a2_send_once && _a2_wait_for_transition; then
+            pass "A2 — transitioned on resend (D-09 retry path validated; production will report last_portapack_transition=retried)"
+        else
+            fail "A2 — both attempts exhausted without transition. Check Mayhem firmware version or bump PORTAPACK_REENUM_TIMEOUT_S."
         fi
     else
-        fail "A2 — pyserial send helper exited non-zero. Install pyserial>=3.5 or check /dev/portapack permissions."
+        fail "A2 — pyserial send helper failed. Install pyserial>=3.5 or check /dev/portapack permissions."
     fi
 fi
 
