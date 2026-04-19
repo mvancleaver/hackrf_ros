@@ -80,19 +80,19 @@ if [[ ! -e /dev/portapack ]]; then
 elif ! command -v python3 >/dev/null 2>&1; then
     note "A2 skipped: python3 not on PATH. Install pyserial and retry."
 else
-    echo "A2: sending PORTAPACK_COMMAND via pyserial with 50 ms DTR settle (attempt 1/2) ..."
+    echo "A2: sending PORTAPACK_COMMAND via raw os.open (O_WRONLY|O_NOCTTY) + 50 ms settle (attempt 1/2) ..."
     if _a2_send_once && _a2_wait_for_transition; then
         pass "A2 — transitioned on first attempt"
     elif [[ -e "$NODE" && -e /dev/portapack ]]; then
         note "A2: first attempt did not trigger transition within 5 s — executing D-09 resend path."
-        echo "A2: resend via pyserial (attempt 2/2) ..."
+        echo "A2: resend via raw os.open (attempt 2/2) ..."
         if _a2_send_once && _a2_wait_for_transition; then
             pass "A2 — transitioned on resend (D-09 retry path validated; production will report last_portapack_transition=retried)"
         else
             fail "A2 — both attempts exhausted without transition. Check Mayhem firmware version or bump PORTAPACK_REENUM_TIMEOUT_S."
         fi
     else
-        fail "A2 — pyserial send helper failed. Install pyserial>=3.5 or check /dev/portapack permissions."
+        fail "A2 — raw-fd send helper failed. Check /dev/portapack permissions or python3 availability."
     fi
 fi
 
