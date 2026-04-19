@@ -111,4 +111,4 @@ Plans:
 - [x] 05-01-PLAN.md — Udev rule + docker-compose cgroup/bind + pyserial pip dep + host install script with A1 VID:PID capture
 - [x] 05-02-PLAN.md — _transition_portapack helper, PortapackTransitionResult enum, 4 new ROS params, on_configure retry loop, diagnostics field, setup.py pyserial dep
 - [x] 05-03-PLAN.md — PROJECT.md + REQUIREMENTS.md scope reversal (D-00) and minting of REQ-P5-00..REQ-P5-16 + REQ-P5-A1/REQ-P5-A3
-- [ ] 05-04-PLAN.md — test/test_portapack_transition.py full suite + scripts/hil_portapack_check.sh for A1/A2/A3 hardware verification
+- [x] 05-04-PLAN.md — test/test_portapack_transition.py full suite + scripts/hil_portapack_check.sh for A1/A2/A3 hardware verification
