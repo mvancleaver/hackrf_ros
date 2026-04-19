@@ -64,6 +64,31 @@
 - [ ] **HW-01**: KrakenSDR direction finding integration publishes AOA estimates as PoseWithCovarianceStamped
 - [ ] **HW-02**: Multi-radio architecture supports namespace-separated instances (/hackrf_0/*, /hackrf_1/*)
 
+### Portapack Boot Transition (Phase 5)
+
+Phase 5 minted these IDs during planning. Each maps 1:1 to a CONTEXT.md D-XX decision
+or a RESEARCH.md assumption requiring hardware verification. All Pending on creation.
+
+- [ ] **REQ-P5-00**: Scope-decision reversal — this REQUIREMENTS file AND PROJECT.md replace the blanket "Mayhem firmware control out of scope" statement with a bounded one that in-scopes only the single mode-switch command (D-00)
+- [ ] **REQ-P5-01**: Udev rule matches Portapack via `ATTRS{idVendor}` + `ATTRS{idProduct}` (VID:PID only) (D-01)
+- [ ] **REQ-P5-02**: Udev rule creates stable symlink `/dev/portapack` on the CDC-ACM interface via `SYMLINK+="portapack"` (D-02)
+- [ ] **REQ-P5-03**: docker-compose.yaml declares `device_cgroup_rules: ['c 189:* rmw', 'c 166:* rmw']` and bind-mounts `/dev:/dev` (D-03)
+- [ ] **REQ-P5-04**: Udev rule is installed on the host filesystem at `/etc/udev/rules.d/99-portapack.rules` via a deployment script (NOT baked into the container image) (D-04)
+- [ ] **REQ-P5-05**: Serial handshake opens `/dev/portapack` with pyserial at 115200 8N1 and writes `b'hackrf\n'` as the mode-switch command (D-05)
+- [ ] **REQ-P5-06**: Transition sequence is open→write(`hackrf\n`)→close→poll `pyhackrf2.HackRF.enumerate()` until a HackRF appears or timeout elapses→open HackRF (D-06)
+- [ ] **REQ-P5-07**: When `/dev/portapack` is absent or `portapack_enable_transition=False`, the helper returns SKIPPED and proceeds directly to `pyhackrf2.HackRF(...)` (D-07)
+- [ ] **REQ-P5-08**: When `serial.Serial(...)` raises on an existing symlink (stale symlink case), the helper logs ERROR and returns SKIPPED (fall-through, not FAILED) (D-08)
+- [ ] **REQ-P5-09**: When the first re-enumeration attempt times out, the helper resends the hackrf command and polls once more; if still absent, returns FAILED and `on_configure` returns `TransitionCallbackReturn.FAILURE` (D-09)
+- [ ] **REQ-P5-10**: `on_configure` retries `pyhackrf2.HackRF(...)` up to `portapack_open_retries` times with `PORTAPACK_OPEN_RETRY_DELAY_S` (0.25 s) spacing to absorb the USB kernel-claim race (D-10)
+- [ ] **REQ-P5-11**: `_diagnostics_callback` publishes the `last_portapack_transition` field with one of `skipped`, `succeeded`, `retried`, `failed`; state is written on every configure before returning (D-11)
+- [ ] **REQ-P5-12**: Four new ROS2 parameters declared: `portapack_serial_device` (str, default `/dev/portapack`), `portapack_enable_transition` (bool, default True), `portapack_reenum_timeout_s` (float, default 5.0), `portapack_open_retries` (int, default 3) (D-12)
+- [ ] **REQ-P5-13**: Defaults for those parameters exist as module constants at the top of `hackrf_lifecycle_node.py` (D-13)
+- [ ] **REQ-P5-14**: None of the portapack_* parameters are dynamic; they are read once in `on_configure` and a mid-run change has no hardware effect (D-14)
+- [ ] **REQ-P5-15**: The diagnostics field values are exactly `skipped`, `succeeded`, `retried`, `failed` (enum-driven; format guarantee for downstream autonomy observers) (D-15)
+- [ ] **REQ-P5-16**: `_transition_portapack()` is called in `on_configure` between `self._declare_parameters()` and `pyhackrf2.HackRF(...)`, returns a `PortapackTransitionResult` enum, and never raises (D-16, Pitfall 2)
+- [ ] **REQ-P5-A1**: Portapack CDC-ACM VID:PID verified against live hardware (assumed `1d50:6018`, confirmed via `udevadm info -a -n /dev/ttyACM*` during deployment) (A1)
+- [ ] **REQ-P5-A3**: Post-open DTR/RTS settle of at least 50 ms is empirically sufficient (first bytes after `serial.Serial(...)` open not dropped), or `PORTAPACK_DTR_SETTLE_S` is raised to 100 ms (A3)
+
 ## v2 Requirements
 
 ### Advanced Classification
@@ -85,7 +110,8 @@
 | Redis IQ streaming | Replaced by ROS2 topics and SigMF recording |
 | GUI applications in core | Display nodes are optional downstream subscribers |
 | Real-time signal decode | Not needed for spectrum awareness use case |
-| Mayhem firmware control | Separate package concern (pymayhem) |
+| Mayhem mode-switch command (exit Mayhem UI → HackRF USB-SDR) | IN SCOPE since Phase 5 (Portapack Boot Transition). Bounded reversal of prior decision per CONTEXT.md D-00. See REQ-P5-00. |
+| All other Mayhem firmware control (UI nav, DFU, file transfer, TX apps) | Separate package concern (pymayhem). Phase 5 narrowly excepts the mode-switch only. |
 
 ## Traceability
 
@@ -123,10 +149,29 @@
 | ADV-03 | Phase 4 | Advanced Signal Intelligence | Pending |
 | HW-01 | Phase 4 | Advanced Signal Intelligence | Pending |
 | HW-02 | Phase 4 | Advanced Signal Intelligence | Pending |
+| REQ-P5-00 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-01 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-02 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-03 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-04 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-05 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-06 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-07 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-08 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-09 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-10 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-11 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-12 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-13 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-14 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-15 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-16 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-A1 | Phase 5 | Portapack Boot Transition | Pending |
+| REQ-P5-A3 | Phase 5 | Portapack Boot Transition | Pending |
 
 **Coverage:**
-- v1 requirements: 32 total
-- Mapped to phases: 32
+- v1 requirements: 51 total (32 original + 19 Phase 5)
+- Mapped to phases: 51
 - Unmapped: 0
 
 **Phase distribution:**
@@ -134,7 +179,8 @@
 - Phase 2 (Robot Autonomy Integration): 10 requirements (SWP-01..03, REC-01..04, MAP-01..03)
 - Phase 3 (Reliability): 3 requirements (REL-01..03)
 - Phase 4 (Advanced Signal Intelligence): 5 requirements (ADV-01..03, HW-01..02)
+- Phase 5 (Portapack Boot Transition): 19 requirements (REQ-P5-00..16, REQ-P5-A1, REQ-P5-A3)
 
 ---
 *Requirements defined: 2026-04-13*
-*Last updated: 2026-04-13 after roadmap creation — traceability finalized*
+*Last updated: 2026-04-18 after Phase 5 requirement mint (REQ-P5-00..16 + REQ-P5-A1, A3)*
