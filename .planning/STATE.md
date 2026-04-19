@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 04-advanced-signal-intelligence/04-03-PLAN.md
-last_updated: "2026-04-13T06:36:40.499Z"
+stopped_at: Phase 5 context gathered
+last_updated: "2026-04-19T04:16:47.441Z"
 last_activity: 2026-04-13
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 4
   total_plans: 15
   completed_plans: 15
@@ -95,6 +95,10 @@ Recent decisions affecting current work:
 - [Phase 04]: Multi-start Nelder-Mead with RSSI-weighted centroid initial guess handles symmetric observation geometries where equal-distance poses make path loss exponent n unidentifiable from single-start
 - [Phase 04]: Soft penalty (1e6*(n-bound)^2) in cost function enforces physical range for n [1.5, 6.0] without requiring L-BFGS-B — Nelder-Mead retains robustness to irregular cost landscapes
 
+### Roadmap Evolution
+
+- 2026-04-18: Phase 5 added — Portapack Boot Transition (lifecycle node transitions Mayhem → HackRF USB-SDR mode on configure; reverses prior PROJECT.md:45 / REQUIREMENTS.md:88 scope decision that placed Mayhem control out of this package)
+
 ### Pending Todos
 
 None yet.
@@ -107,6 +111,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-13T06:36:40.495Z
-Stopped at: Completed 04-advanced-signal-intelligence/04-03-PLAN.md
-Resume file: None
+Last session: 2026-04-19T04:16:47.439Z
+Stopped at: Phase 5 context gathered
+Resume file: .planning/phases/05-portapack-boot-transition/05-CONTEXT.md
