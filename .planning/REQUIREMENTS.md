@@ -85,7 +85,8 @@
 | Redis IQ streaming | Replaced by ROS2 topics and SigMF recording |
 | GUI applications in core | Display nodes are optional downstream subscribers |
 | Real-time signal decode | Not needed for spectrum awareness use case |
-| Mayhem firmware control | Separate package concern (pymayhem) |
+| Mayhem mode-switch command (exit Mayhem UI → HackRF USB-SDR) | IN SCOPE since Phase 5 (Portapack Boot Transition). Bounded reversal of prior decision per CONTEXT.md D-00. See REQ-P5-00. |
+| All other Mayhem firmware control (UI nav, DFU, file transfer, TX apps) | Separate package concern (pymayhem). Phase 5 narrowly excepts the mode-switch only. |
 
 ## Traceability
 
