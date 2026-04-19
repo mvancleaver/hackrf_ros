@@ -22,8 +22,10 @@ echo "=== Phase 5 HIL checkpoint — report at $REPORT ==="
 if [[ -z "$NODE" ]]; then
     fail "A1 — no /dev/ttyACM* present. Attach Portapack in Mayhem UI mode."
 fi
-VENDOR="$(udevadm info -a -n "$NODE" 2>/dev/null | grep -m1 '{idVendor}' | sed -E 's/.*"([0-9a-f]+)".*/\1/')"
-PRODUCT="$(udevadm info -a -n "$NODE" 2>/dev/null | grep -m1 '{idProduct}' | sed -E 's/.*"([0-9a-f]+)".*/\1/')"
+# SIGPIPE guard: see scripts/install_portapack_udev.sh for rationale.
+UDEV_DUMP="$(udevadm info -a -n "$NODE" 2>/dev/null || true)"
+VENDOR="$(printf '%s\n' "$UDEV_DUMP" | grep -m1 '{idVendor}' | sed -E 's/.*"([0-9a-f]+)".*/\1/' || true)"
+PRODUCT="$(printf '%s\n' "$UDEV_DUMP" | grep -m1 '{idProduct}' | sed -E 's/.*"([0-9a-f]+)".*/\1/' || true)"
 echo "A1: observed VID:PID = ${VENDOR}:${PRODUCT}"
 if [[ "$VENDOR" == "1d50" && "$PRODUCT" == "6018" ]]; then
     pass "A1 — Portapack VID:PID matches udev rule (1d50:6018)"
@@ -70,7 +72,7 @@ else
     FIRST_SUCCESS=0
     for i in $(seq 1 10); do
         ros2 lifecycle set /hackrf_node cleanup 2>/dev/null || true
-        ros2 lifecycle set /hackrf_node configure 2>&1 >/dev/null || true
+        ros2 lifecycle set /hackrf_node configure >/dev/null 2>&1 || true
         # Diagnostics field: skipped | succeeded | retried | failed
         STATUS=$(ros2 topic echo --once /diagnostics 2>/dev/null | grep -m1 last_portapack_transition | awk '{print $NF}')
         echo "  run $i: $STATUS"
