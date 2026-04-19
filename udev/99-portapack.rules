@@ -12,4 +12,4 @@
 # (HackRF One). That interface is handled by the existing libusb path
 # and does NOT need a udev rule here.
 
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", SYMLINK+="portapack", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", SYMLINK+="portapack", MODE="0660", GROUP="dialout"
