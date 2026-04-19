@@ -163,16 +163,42 @@ class HackRFLifecycleNode(LifecycleNode):
         self.get_logger().info('Configuring...')
         self._declare_parameters()
 
+        # Phase 5 - Portapack boot transition (D-11, D-16). Helper never
+        # raises; on FAILED we return FAILURE (stays in UNCONFIGURED;
+        # retryable via trigger_configure) instead of raising (which
+        # would send the node to ErrorProcessing - Pitfall 2).
+        transition_result = self._transition_portapack()
+        self._last_portapack_transition = transition_result.value
+        if transition_result == PortapackTransitionResult.FAILED:
+            self.get_logger().error(
+                'Portapack transition failed - power-cycle the Portapack '
+                'and retry configure.')
+            return TransitionCallbackReturn.FAILURE
+
         try:
             import pyhackrf2
-            device_index = int(self.get_parameter('device_index').value)
-            self._hackrf = pyhackrf2.HackRF(device_index=device_index)
         except ImportError:
             self.get_logger().error('pyhackrf2 not installed.')
             return TransitionCallbackReturn.FAILURE
-        except (RuntimeError, OSError) as e:
+
+        device_index = int(self.get_parameter('device_index').value)
+        retries = max(1, int(self.get_parameter('portapack_open_retries').value))
+        last_exc: Exception | None = None
+        self._hackrf = None
+        # D-10 - retry loop absorbs the USB kernel-claim race window
+        # between re-enumeration and libhackrf device-handle cache update.
+        for attempt in range(retries):
+            try:
+                self._hackrf = pyhackrf2.HackRF(device_index=device_index)
+                break
+            except (RuntimeError, OSError) as e:
+                last_exc = e
+                if attempt + 1 < retries:
+                    time.sleep(PORTAPACK_OPEN_RETRY_DELAY_S)
+        if self._hackrf is None:
             self.get_logger().error(
-                f'Failed to open HackRF at device_index={device_index}: {e}')
+                f'Failed to open HackRF at device_index={device_index} '
+                f'after {retries} attempts: {last_exc}')
             return TransitionCallbackReturn.FAILURE
 
         self._apply_params_to_device()
@@ -1049,6 +1075,8 @@ class HackRFLifecycleNode(LifecycleNode):
         stat.add('adc_clips', str(self._clip_count))
         stat.add('usb_fault', str(self._usb_fault).lower())
         stat.add('agc_last_action', self._agc_last_action)
+        # D-15 - Portapack boot transition outcome from most recent configure.
+        stat.add('last_portapack_transition', self._last_portapack_transition)
         if self._activate_time is not None:
             stat.add('uptime_s', f'{now - self._activate_time:.1f}')
         return stat
